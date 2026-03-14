@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
@@ -12,6 +13,13 @@ import pandas as pd
 
 
 MODEL_PATH = Path(__file__).resolve().parents[1] / "training_artifacts" / "supervised_binary_sgd.joblib"
+
+
+def _clamp_threshold(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+_ANOMALY_THRESHOLD = _clamp_threshold(float(os.getenv("ML_ANOMALY_THRESHOLD", "0.5")))
 
 
 @lru_cache(maxsize=1)
@@ -60,15 +68,28 @@ def predict_anomaly(features: Dict[str, Any]) -> Dict[str, Any]:
         decision = float(model.decision_function(frame)[0])
         score = float(1.0 / (1.0 + np.exp(-decision)))
 
-    label = "anomaly" if pred == 1 else "normal"
+    threshold = get_anomaly_threshold()
+    is_anomaly = bool(score >= threshold)
+    label = "anomaly" if is_anomaly else "normal"
     return {
         "prediction": label,
-        "anomaly": bool(pred == 1),
+        "anomaly": is_anomaly,
         "score": score,
-        "threshold": 0.5,
+        "threshold": threshold,
+        "model_label": "anomaly" if pred == 1 else "normal",
         "expected_feature_count": len(expected),
         "provided_feature_count": len(features),
     }
+
+
+def get_anomaly_threshold() -> float:
+    return _ANOMALY_THRESHOLD
+
+
+def set_anomaly_threshold(value: float) -> float:
+    global _ANOMALY_THRESHOLD
+    _ANOMALY_THRESHOLD = _clamp_threshold(value)
+    return _ANOMALY_THRESHOLD
 
 
 def model_status() -> Dict[str, Any]:
@@ -82,4 +103,5 @@ def model_status() -> Dict[str, Any]:
     if exists:
         model = load_supervised_model()
         status["expected_feature_count"] = len(_expected_features(model))
+    status["anomaly_threshold"] = get_anomaly_threshold()
     return status

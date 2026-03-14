@@ -140,6 +140,7 @@ export default function Dashboard() {
   const [agents, setAgents] = useState([])
   const [recentAlerts, setRecentAlerts] = useState([])
   const [agentMessages, setAgentMessages] = useState([])
+  const [mlPredictions, setMlPredictions] = useState([])
   const [chartData, setChartData] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -194,6 +195,9 @@ export default function Dashboard() {
     if (msg.type === 'alert') setRecentAlerts(p => [msg.data, ...p].slice(0, 8))
     if (msg.type === 'agent_message') setAgentMessages(p => [...p, msg.data].slice(-20))
     if (msg.type === 'status') setAgents(msg.data.agents || [])
+    if (msg.type === 'ml_prediction') {
+      setMlPredictions(p => [msg.data, ...p].slice(0, 6))
+    }
   }, [])
   useWebSocket(handleWsMessage)
 
@@ -317,6 +321,32 @@ export default function Dashboard() {
 
       {/* Agent Communication Feed */}
       <AgentCommunicationFeed messages={agentMessages} maxHeight={280} />
+
+      <div className="cyber-card overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800">
+          <Zap className="w-4 h-4 text-cyan-400" />
+          <span className="font-mono text-sm font-semibold text-slate-300">ML Live Predictions</span>
+        </div>
+        <div className="divide-y divide-slate-800/50 max-h-60 overflow-y-auto">
+          {mlPredictions.length === 0 ? (
+            <div className="py-8 text-center">
+              <p className="font-mono text-xs text-slate-600">Waiting for ml_prediction websocket events</p>
+            </div>
+          ) : mlPredictions.map((m, i) => (
+            <div key={i} className="px-4 py-3 flex items-center gap-3">
+              <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${m?.result?.anomaly ? 'text-rose-300 border-rose-500/30 bg-rose-500/10' : 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'}`}>
+                {String(m?.result?.prediction || 'unknown').toUpperCase()}
+              </span>
+              <span className="font-mono text-xs text-slate-400 truncate">
+                {m?.event || 'event'} · {m?.source_ip || 'unknown ip'}
+              </span>
+              <span className="ml-auto font-mono text-xs text-slate-500">
+                {Math.round((m?.result?.score || 0) * 100)}%
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

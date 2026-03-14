@@ -220,6 +220,8 @@ npm run dev
 | POST | `/data/seed-real` | Insert realistic SOC sample data |
 | GET | `/ml/status` | Check trained model availability |
 | POST | `/ml/predict` | Predict anomaly/normal from flow features |
+| GET | `/ml/config` | Read runtime ML threshold config |
+| POST | `/ml/config` | Update runtime ML threshold config |
 
 ### WebSocket
 
@@ -287,6 +289,16 @@ Outputs:
 
 ```bash
 curl -X GET http://localhost:8000/ml/status
+```
+
+```bash
+curl -X GET http://localhost:8000/ml/config
+```
+
+```bash
+curl -X POST http://localhost:8000/ml/config \
+  -H "Content-Type: application/json" \
+  -d '{"anomaly_threshold":0.55}'
 ```
 
 ```bash

@@ -1,6 +1,6 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Zap, Play, Shield, Terminal, Activity, AlertTriangle, Wifi, Target } from 'lucide-react'
-import { simulatorAPI } from '../services/api'
+import { mlAPI, simulatorAPI } from '../services/api'
 import { useWebSocket } from '../services/websocket'
 import { PageHeader, SeverityBadge, ConfidenceBar, Timestamp } from '../components/ui'
 
@@ -103,7 +103,7 @@ function SimTerminal({ events }) {
 // ── Result Panel ──────────────────────────────────────────────────────
 function SimResult({ result }) {
   if (!result) return null
-  const { attack, agent_result } = result
+  const { attack, agent_result, ml_result, ml_alert } = result
   const alert = agent_result?.alert
 
   return (
@@ -146,6 +146,28 @@ function SimResult({ result }) {
               <ConfidenceBar value={alert.confidence} />
             </span>
           </div>
+        </div>
+      )}
+
+      {ml_result && (
+        <div className="pt-4 border-t border-slate-800 mt-4">
+          <p className="text-[11px] font-mono text-slate-600 uppercase mb-3">ML Scoring</p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className={`px-2 py-1 rounded border text-[11px] font-mono font-semibold ${ml_result.anomaly ? 'text-rose-300 border-rose-500/30 bg-rose-500/10' : 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'}`}>
+              {ml_result.prediction?.toUpperCase()}
+            </span>
+            <span className="font-mono text-xs text-slate-400">
+              Score: {Math.round((ml_result.score || 0) * 100)}%
+            </span>
+            <span className="font-mono text-xs text-slate-500">
+              Threshold: {Math.round((ml_result.threshold || 0.5) * 100)}%
+            </span>
+          </div>
+          {ml_alert && (
+            <p className="font-mono text-xs text-rose-300 mt-2">
+              ML alert generated: {ml_alert.event}
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -216,6 +238,8 @@ export default function Simulator() {
   const [termEvents, setTermEvents] = useState([])
   const [lastResult, setLastResult] = useState(null)
   const [wsEvents, setWsEvents] = useState([])
+  const [mlThreshold, setMlThreshold] = useState(0.5)
+  const [thresholdDraft, setThresholdDraft] = useState('0.5')
 
   const addTermEvent = useCallback((type, tag, msg) => {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false })
@@ -235,8 +259,48 @@ export default function Simulator() {
     if (msg.type === 'response') {
       addTermEvent('success', '[RESPONSE]', `${msg.data.action} — confidence: ${Math.round((msg.data.confidence || 0) * 100)}%`)
     }
+    if (msg.type === 'ml_prediction') {
+      const r = msg.data?.result || {}
+      addTermEvent(
+        r.anomaly ? 'warn' : 'agent',
+        '[ML]',
+        `${msg.data?.event || 'event'} => ${String(r.prediction || 'unknown').toUpperCase()} (${Math.round((r.score || 0) * 100)}%)`
+      )
+    }
   }, [addTermEvent])
   useWebSocket(handleWs)
+
+  const loadThreshold = useCallback(async () => {
+    try {
+      const res = await mlAPI.getConfig()
+      const v = Number(res.data?.anomaly_threshold ?? 0.5)
+      setMlThreshold(v)
+      setThresholdDraft(String(v))
+    } catch {
+      // Keep default if backend isn't reachable.
+    }
+  }, [])
+
+  const saveThreshold = useCallback(async () => {
+    const num = Number(thresholdDraft)
+    if (Number.isNaN(num) || num < 0 || num > 1) {
+      addTermEvent('error', '[ML]', 'Threshold must be a number between 0 and 1')
+      return
+    }
+    try {
+      const res = await mlAPI.setConfig(num)
+      const v = Number(res.data?.anomaly_threshold ?? num)
+      setMlThreshold(v)
+      setThresholdDraft(String(v))
+      addTermEvent('success', '[ML]', `Anomaly threshold updated to ${v.toFixed(2)}`)
+    } catch (err) {
+      addTermEvent('error', '[ML]', err.response?.data?.detail || 'Failed to update threshold')
+    }
+  }, [thresholdDraft, addTermEvent])
+
+  useEffect(() => {
+    loadThreshold()
+  }, [loadThreshold])
 
   const launchAttack = useCallback(async (attackType) => {
     setRunning(attackType)
@@ -298,6 +362,25 @@ export default function Simulator() {
         <div className="text-xs font-mono text-slate-400">
           <span className="text-yellow-400 font-semibold">SIMULATION MODE — </span>
           All attacks are synthetic and contained within the platform. Triggers real agent pipelines, generates real alerts and automated responses with XAI reasoning.
+        </div>
+      </div>
+
+      <div className="cyber-card p-4">
+        <p className="text-xs font-mono text-slate-500 uppercase mb-3">ML Threshold Control</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="number"
+            min="0"
+            max="1"
+            step="0.01"
+            value={thresholdDraft}
+            onChange={(e) => setThresholdDraft(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded px-3 py-2 font-mono text-sm text-slate-200 w-28"
+          />
+          <button onClick={saveThreshold} className="btn-cyber text-xs px-3 py-2">Apply Threshold</button>
+          <p className="font-mono text-xs text-slate-500">
+            Current: <span className="text-slate-300">{mlThreshold.toFixed(2)}</span>
+          </p>
         </div>
       </div>
 
