@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import time
 from typing import Dict, Tuple
 
 import joblib
@@ -25,6 +26,11 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+
+def _log(message: str) -> None:
+    now = time.strftime("%H:%M:%S")
+    print(f"[{now}] {message}", flush=True)
 
 
 def _normalize_label(raw: str) -> str:
@@ -65,11 +71,13 @@ def _load_dataset(dataset_dir: Path, max_rows_per_file: int, chunksize: int, see
 
     frames = []
     for f in files:
-        print(f"[INFO] Loading {f.name}")
+        _log(f"[INFO] Loading {f.name}")
         frames.append(_read_sampled_csv(f, max_rows_per_file, chunksize, seed))
 
+    _log("[INFO] Concatenating loaded CSV chunks")
     df = pd.concat(frames, ignore_index=True)
     df["Label"] = df["Label"].map(_normalize_label)
+    _log(f"[INFO] Dataset ready with {len(df):,} rows")
     return df
 
 
@@ -224,10 +232,20 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("[INFO] Training source: dataset CSV files (MongoDB not used)")
-    df = _load_dataset(dataset_dir, args.max_rows_per_file, args.chunksize, args.seed)
-    x, y, ports = _prepare_xy(df)
+    run_start = time.time()
+    _log("[INFO] Training source: dataset CSV files (MongoDB not used)")
 
+    stage_start = time.time()
+    df = _load_dataset(dataset_dir, args.max_rows_per_file, args.chunksize, args.seed)
+    _log(f"[INFO] Load stage done in {time.time() - stage_start:.1f}s")
+
+    stage_start = time.time()
+    _log("[INFO] Preparing numeric feature matrix")
+    x, y, ports = _prepare_xy(df)
+    _log(f"[INFO] Feature prep done in {time.time() - stage_start:.1f}s (features={x.shape[1]})")
+
+    stage_start = time.time()
+    _log("[INFO] Splitting train/test")
     x_train, x_test, y_train, y_test, p_train, p_test = train_test_split(
         x,
         y,
@@ -236,20 +254,30 @@ def main() -> None:
         random_state=args.seed,
         stratify=y,
     )
+    _log(f"[INFO] Split done in {time.time() - stage_start:.1f}s (train={len(x_train):,}, test={len(x_test):,})")
 
+    stage_start = time.time()
+    _log("[INFO] Training supervised binary model (SGDClassifier)")
     sup = _train_supervised(x_train, y_train, args.seed)
     sup_pred = sup.predict(x_test)
     sup_score = sup.predict_proba(x_test)[:, 1]
     sup_metrics = _evaluate(y_test.to_numpy(), sup_pred, sup_score)
+    _log(f"[INFO] Supervised stage done in {time.time() - stage_start:.1f}s")
 
+    stage_start = time.time()
+    _log("[INFO] Training unsupervised model (IsolationForest)")
     pre, unsup, threshold = _train_unsupervised(x_train, y_train, args.seed)
     x_test_unsup = pre.transform(x_test)
     unsup_score = -unsup.score_samples(x_test_unsup)
     unsup_pred = (unsup_score >= threshold).astype(int)
     unsup_metrics = _evaluate(y_test.to_numpy(), unsup_pred, unsup_score)
     unsup_metrics["threshold"] = threshold
+    _log(f"[INFO] Unsupervised stage done in {time.time() - stage_start:.1f}s")
 
+    stage_start = time.time()
+    _log("[INFO] Evaluating per-system proxy baseline")
     port_metrics = _evaluate_port_baseline(x_train, y_train, p_train, x_test, y_test, p_test)
+    _log(f"[INFO] Per-system proxy stage done in {time.time() - stage_start:.1f}s")
 
     report = {
         "dataset": {
@@ -269,12 +297,16 @@ def main() -> None:
         "per_system_proxy": port_metrics,
     }
 
+    stage_start = time.time()
+    _log("[INFO] Writing model artifacts and metrics report")
     joblib.dump(sup, output_dir / "supervised_binary_sgd.joblib")
     joblib.dump({"preprocessor": pre, "model": unsup, "threshold": threshold}, output_dir / "unsupervised_iforest.joblib")
     (output_dir / "metrics_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    _log(f"[INFO] Artifact write done in {time.time() - stage_start:.1f}s")
 
-    print(f"[OK] Artifacts written to: {output_dir}")
-    print("[OK] Report: metrics_report.json")
+    _log(f"[OK] Artifacts written to: {output_dir}")
+    _log("[OK] Report: metrics_report.json")
+    _log(f"[OK] Total runtime: {time.time() - run_start:.1f}s")
 
 
 if __name__ == "__main__":

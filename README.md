@@ -218,6 +218,8 @@ npm run dev
 | GET | `/responses/stats` | Response counts by status |
 | POST | `/simulate-attack` | Trigger attack simulation |
 | POST | `/data/seed-real` | Insert realistic SOC sample data |
+| GET | `/ml/status` | Check trained model availability |
+| POST | `/ml/predict` | Predict anomaly/normal from flow features |
 
 ### WebSocket
 
@@ -280,6 +282,27 @@ Outputs:
 - `training_artifacts/supervised_binary_sgd.joblib`
 - `training_artifacts/unsupervised_iforest.joblib`
 - `training_artifacts/metrics_report.json`
+
+### Run Inference
+
+```bash
+curl -X GET http://localhost:8000/ml/status
+```
+
+```bash
+curl -X POST http://localhost:8000/ml/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "features": {
+      "Destination Port": 80,
+      "Flow Duration": 1200,
+      "Total Fwd Packets": 18,
+      "Total Backward Packets": 10,
+      "Flow Bytes/s": 41200,
+      "Flow Packets/s": 23
+    }
+  }'
+```
 
 ---
 
