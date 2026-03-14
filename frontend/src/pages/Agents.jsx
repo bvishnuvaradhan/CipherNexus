@@ -71,9 +71,34 @@ const AGENT_META = {
   },
 }
 
-function AgentDetailCard({ agent }) {
+const DEFAULT_AGENTS = [
+  { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor network traffic','Detect traffic spikes','Identify port scans','Flag suspicious IPs'], uptime_seconds: 0 },
+  { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Analyze login attempts','Detect brute force attacks','Flag abnormal login locations','Analyze system logs'], uptime_seconds: 0 },
+  { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Correlate signals from Sentry & Detective','Determine threat severity','Initiate mitigation actions','Generate XAI reasoning paths'], uptime_seconds: 0 },
+  { name: 'Threat Intelligence', role: 'Threat Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor IOC and reputation feeds','Correlate IPs with malicious infrastructure','Track CVE and reputation context','Reduce false positives with external intel'], uptime_seconds: 0 },
+  { name: 'Anomaly Detection', role: 'Behavioral Analytics', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Detect behavioral anomalies','Score suspicious events with ML','Identify unknown attack patterns','Provide anomaly confidence'], uptime_seconds: 0 },
+  { name: 'Response Automation', role: 'Defensive Execution', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Execute containment actions','Block malicious IPs','Trigger notifications','Track execution outcomes'], uptime_seconds: 0 },
+  { name: 'Forensics', role: 'Incident Investigation', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Reconstruct attack timelines','Summarize incident evidence','Generate forensic notes','Support future tuning'], uptime_seconds: 0 },
+]
+
+function mergeAgentsWithDefaults(liveAgents = []) {
+  const byName = new Map((liveAgents || []).map((a) => [a.name, a]))
+  const receivedAtMs = Date.now()
+  return DEFAULT_AGENTS.map((base) => ({
+    ...base,
+    ...(byName.get(base.name) || {}),
+    _receivedAtMs: receivedAtMs,
+  }))
+}
+
+function AgentDetailCard({ agent, nowMs }) {
   const meta = AGENT_META[agent.name] || AGENT_META.Sentry
   const Icon = meta.icon
+  const baseUptime = Number(agent.uptime_seconds || 0)
+  const receivedAtMs = Number(agent._receivedAtMs || nowMs)
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - receivedAtMs) / 1000))
+  const uptimeSeconds = baseUptime + elapsedSeconds
+  const uptimeLabel = uptimeSeconds < 60 ? `${uptimeSeconds}s` : `${Math.floor(uptimeSeconds / 60)}m`
 
   return (
     <div className={`cyber-card ring-1 ${meta.ring} overflow-hidden`}>
@@ -111,9 +136,7 @@ function AgentDetailCard({ agent }) {
         </div>
         <div>
           <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-1">Uptime</p>
-          <p className="font-display font-bold text-2xl text-slate-300">
-            {Math.floor((agent.uptime_seconds || 0) / 60)}m
-          </p>
+          <p className="font-display font-bold text-2xl text-slate-300">{uptimeLabel}</p>
         </div>
         <div className="col-span-2">
           <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-2">Avg Confidence</p>
@@ -182,9 +205,10 @@ function A2AProtocolDiagram() {
 }
 
 export default function Agents() {
-  const [agents, setAgents] = useState([])
+  const [agents, setAgents] = useState(() => mergeAgentsWithDefaults())
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
+  const [nowMs, setNowMs] = useState(Date.now())
 
   const load = useCallback(async () => {
     try {
@@ -192,31 +216,23 @@ export default function Agents() {
         agentsAPI.list(),
         logsAPI.agentMessages(30),
       ])
-      if (ag.status === 'fulfilled') setAgents(ag.value.data.agents || [])
+      if (ag.status === 'fulfilled') setAgents(mergeAgentsWithDefaults(ag.value.data.agents || []))
       if (msgs.status === 'fulfilled') setMessages(msgs.value.data.messages || [])
     } finally { setLoading(false) }
   }, [])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { const id = setInterval(load, 10000); return () => clearInterval(id) }, [load])
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
 
   const handleWs = useCallback((msg) => {
-    if (msg.type === 'status') setAgents(msg.data.agents || [])
+    if (msg.type === 'status') setAgents(mergeAgentsWithDefaults(msg.data.agents || []))
     if (msg.type === 'agent_message') setMessages(p => [...p, msg.data].slice(-30))
   }, [])
   useWebSocket(handleWs)
-
-  const defaultAgents = [
-    { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor network traffic','Detect traffic spikes','Identify port scans','Flag suspicious IPs'], uptime_seconds: 0 },
-    { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Analyze login attempts','Detect brute force attacks','Flag abnormal login locations','Analyze system logs'], uptime_seconds: 0 },
-    { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Correlate signals from Sentry & Detective','Determine threat severity','Initiate mitigation actions','Generate XAI reasoning paths'], uptime_seconds: 0 },
-    { name: 'Threat Intelligence', role: 'Threat Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor IOC and reputation feeds','Correlate IPs with malicious infrastructure','Track CVE and reputation context','Reduce false positives with external intel'], uptime_seconds: 0 },
-    { name: 'Anomaly Detection', role: 'Behavioral Analytics', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Detect behavioral anomalies','Score suspicious events with ML','Identify unknown attack patterns','Provide anomaly confidence'], uptime_seconds: 0 },
-    { name: 'Response Automation', role: 'Defensive Execution', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Execute containment actions','Block malicious IPs','Trigger notifications','Track execution outcomes'], uptime_seconds: 0 },
-    { name: 'Forensics', role: 'Incident Investigation', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Reconstruct attack timelines','Summarize incident evidence','Generate forensic notes','Support future tuning'], uptime_seconds: 0 },
-  ]
-
-  const displayAgents = agents.length > 0 ? agents : defaultAgents
 
   return (
     <div className="p-4 lg:p-6 space-y-6 animate-fade-in">
@@ -237,9 +253,9 @@ export default function Agents() {
             </div>
             <div className="overflow-x-auto pb-2">
               <div className="flex gap-4 min-w-max">
-                {displayAgents.map(a => (
+                {agents.map(a => (
                   <div key={a.name} className="w-[360px] shrink-0">
-                    <AgentDetailCard agent={a} />
+                    <AgentDetailCard agent={a} nowMs={nowMs} />
                   </div>
                 ))}
               </div>

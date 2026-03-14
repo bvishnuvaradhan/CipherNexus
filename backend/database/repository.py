@@ -160,3 +160,44 @@ async def get_threat_level() -> Dict[str, Any]:
         "high": high,
         "medium": medium,
     }
+
+
+async def _avg_and_count_numeric(collection: str, match: Dict[str, Any], field: str) -> tuple[float, int]:
+    """Return average and count for a numeric field in a collection."""
+    col = _col(collection)
+    match_query = {**match, field: {"$type": "number"}}
+    pipeline = [
+        {"$match": match_query},
+        {"$group": {"_id": None, "avg": {"$avg": f"${field}"}, "count": {"$sum": 1}}},
+    ]
+    docs = await col.aggregate(pipeline).to_list(length=1)
+    if not docs:
+        return 0.0, 0
+    row = docs[0]
+    return float(row.get("avg", 0.0) or 0.0), int(row.get("count", 0) or 0)
+
+
+async def get_agent_activity_metrics(agent_name: str) -> Dict[str, Any]:
+    """Compute persisted activity metrics for an agent from MongoDB."""
+    alerts_count = await count_documents("alerts", {"agent": agent_name})
+    responses_count = await count_documents("responses", {"agent": agent_name})
+    messages_count = await count_documents("agent_messages", {"from_agent": agent_name})
+
+    alert_avg, alert_n = await _avg_and_count_numeric("alerts", {"agent": agent_name}, "confidence")
+    response_avg, response_n = await _avg_and_count_numeric("responses", {"agent": agent_name}, "confidence")
+    msg_avg, msg_n = await _avg_and_count_numeric("agent_messages", {"from_agent": agent_name}, "payload.confidence")
+
+    total_n = alert_n + response_n + msg_n
+    if total_n > 0:
+        weighted_avg = (
+            (alert_avg * alert_n)
+            + (response_avg * response_n)
+            + (msg_avg * msg_n)
+        ) / total_n
+    else:
+        weighted_avg = 0.0
+
+    return {
+        "threat_count": int(alerts_count + responses_count + messages_count),
+        "confidence_avg": round(float(weighted_avg), 3),
+    }

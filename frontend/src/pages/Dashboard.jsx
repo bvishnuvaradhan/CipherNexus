@@ -12,6 +12,21 @@ import { useWebSocket } from '../services/websocket'
 import { StatCard, SeverityBadge, AgentDot, ConfidenceBar, Spinner, Timestamp } from '../components/ui'
 import { AgentCommunicationFeed } from '../components/AgentFeed'
 
+const DEFAULT_AGENTS = [
+  { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0 },
+  { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0 },
+  { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0 },
+  { name: 'Threat Intelligence', role: 'Threat Intelligence', status: 'online', threat_count: 0, confidence_avg: 0 },
+  { name: 'Anomaly Detection', role: 'Behavioral Analytics', status: 'online', threat_count: 0, confidence_avg: 0 },
+  { name: 'Response Automation', role: 'Defensive Execution', status: 'online', threat_count: 0, confidence_avg: 0 },
+  { name: 'Forensics', role: 'Incident Investigation', status: 'online', threat_count: 0, confidence_avg: 0 },
+]
+
+function mergeAgentsWithDefaults(liveAgents = []) {
+  const byName = new Map((liveAgents || []).map((a) => [a.name, a]))
+  return DEFAULT_AGENTS.map((base) => ({ ...base, ...(byName.get(base.name) || {}) }))
+}
+
 // ── Threat Level Indicator ────────────────────────────────────────────
 function ThreatLevelIndicator({ data }) {
   const config = {
@@ -144,7 +159,7 @@ export default function Dashboard() {
   const [threatLevel, setThreatLevel] = useState({ level: 'LOW', score: 0, active_alerts: 0 })
   const [alertStats, setAlertStats] = useState({})
   const [responseStats, setResponseStats] = useState({})
-  const [agents, setAgents] = useState([])
+  const [agents, setAgents] = useState(DEFAULT_AGENTS)
   const [recentAlerts, setRecentAlerts] = useState([])
   const [agentMessages, setAgentMessages] = useState([])
   const [mlPredictions, setMlPredictions] = useState([])
@@ -164,7 +179,7 @@ export default function Dashboard() {
       if (tl.status === 'fulfilled') setThreatLevel(tl.value.data)
       if (stats.status === 'fulfilled') setAlertStats(stats.value.data)
       if (rStats.status === 'fulfilled') setResponseStats(rStats.value.data)
-      if (ag.status === 'fulfilled') setAgents(ag.value.data.agents || [])
+      if (ag.status === 'fulfilled') setAgents(mergeAgentsWithDefaults(ag.value.data.agents || []))
       if (alerts.status === 'fulfilled') setRecentAlerts(alerts.value.data.alerts || [])
       if (msgs.status === 'fulfilled') setAgentMessages(msgs.value.data.messages || [])
     } finally {
@@ -201,7 +216,7 @@ export default function Dashboard() {
     if (msg.type === 'threat_level') setThreatLevel(msg.data)
     if (msg.type === 'alert') setRecentAlerts(p => [msg.data, ...p].slice(0, 8))
     if (msg.type === 'agent_message') setAgentMessages(p => [...p, msg.data].slice(-20))
-    if (msg.type === 'status') setAgents(msg.data.agents || [])
+    if (msg.type === 'status') setAgents(mergeAgentsWithDefaults(msg.data.agents || []))
     if (msg.type === 'ml_prediction') {
       setMlPredictions(p => [msg.data, ...p].slice(0, 6))
     }
@@ -285,15 +300,10 @@ export default function Dashboard() {
           <p className="font-mono text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
             <Activity className="w-3.5 h-3.5 text-cyan-400" /> Agent Status
           </p>
-          <div className="grid grid-cols-1 gap-3">
-            {agents.length > 0
-              ? agents.map(a => <AgentCard key={a.name} agent={a} />)
-              : [
-                  { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0 },
-                  { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0 },
-                  { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0 },
-                ].map(a => <AgentCard key={a.name} agent={a} />)
-            }
+          <div className="max-h-[520px] overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 gap-3">
+              {agents.map(a => <AgentCard key={a.name} agent={a} />)}
+            </div>
           </div>
         </div>
 

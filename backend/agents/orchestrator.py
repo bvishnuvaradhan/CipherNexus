@@ -230,7 +230,7 @@ class AgentOrchestrator:
         Periodically broadcast system status (threat level, agent status)
         to all connected WebSocket clients.
         """
-        from database.repository import get_threat_level
+        from database.repository import get_threat_level, get_agent_activity_metrics
 
         while True:
             await asyncio.sleep(10)
@@ -238,13 +238,26 @@ class AgentOrchestrator:
                 try:
                     threat = await get_threat_level()
                     await self._ws_manager.broadcast_threat_level(threat)
-                    status = {
-                        "agents": [
-                            self.sentry.get_status(),
-                            self.detective.get_status(),
-                            self.commander.get_status(),
-                        ]
-                    }
+                    statuses = [
+                        self.sentry.get_status(),
+                        self.detective.get_status(),
+                        self.commander.get_status(),
+                        self.threat_intelligence.get_status(),
+                        self.anomaly_detection.get_status(),
+                        self.response_automation.get_status(),
+                        self.forensics.get_status(),
+                    ]
+                    persisted = await asyncio.gather(*[
+                        get_agent_activity_metrics(agent.get("name", ""))
+                        for agent in statuses
+                    ])
+                    merged = []
+                    for status, metric in zip(statuses, persisted):
+                        item = dict(status)
+                        item["threat_count"] = max(int(item.get("threat_count", 0) or 0), int(metric.get("threat_count", 0) or 0))
+                        item["confidence_avg"] = max(float(item.get("confidence_avg", 0.0) or 0.0), float(metric.get("confidence_avg", 0.0) or 0.0))
+                        merged.append(item)
+                    status = {"agents": merged}
                     await self._ws_manager.broadcast_status(status)
                 except Exception as e:
                     print(f"[WARN] Status push error: {e}")
