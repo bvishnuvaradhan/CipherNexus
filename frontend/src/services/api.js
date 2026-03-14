@@ -125,4 +125,11 @@ export const hackerAPI = {
   attackTypes:  () => hackerAxios.get('/simulate-attack/attack-types'),
 }
 
+// ── Machine Learning ──────────────────────────────────────────────────────
+export const mlAPI = {
+  status:   () => api.get('/ml/status'),
+  getConfig: () => api.get('/ml/config'),
+  setConfig: (anomalyThreshold) => api.post('/ml/config', { anomaly_threshold: anomalyThreshold }),
+}
+
 export default api

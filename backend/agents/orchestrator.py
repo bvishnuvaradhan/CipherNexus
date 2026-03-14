@@ -50,7 +50,16 @@ class AgentOrchestrator:
     # Main background loops
     # ------------------------------------------------------------------
 
+    async def run_core_services(self):
+        """Run core message bus and event pushing services."""
+        self._running = True
+        await asyncio.gather(
+            self._process_message_bus(),
+            self._push_live_events(),
+        )
+
     async def run_continuous_monitoring(self):
+        """Run continuous monitoring with threat generation (optional)."""
         self._running = True
         await asyncio.gather(
             # Disabled automatic threat generation - threats only come from Hacker Console
