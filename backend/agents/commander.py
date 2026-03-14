@@ -89,6 +89,7 @@ class CommanderAgent:
         action, response_status = self._decide_action(severity, confidence, ip, threat_type)
 
         # Step 4 — persist response with XAI
+        recommendations = self._generate_recommendations(threat_type, severity, action)
         response = {
             "id": str(uuid.uuid4()),
             "timestamp": datetime.utcnow().isoformat(),
@@ -100,6 +101,7 @@ class CommanderAgent:
             "status": response_status.value,
             "related_alert_id": alert.get("id"),
             "signals": self._build_signals(alert, detective_confirms, detective_detail),
+            "recommendations": recommendations,
         }
         await save_response(response)
         await self._log_action(action, ip, confidence)
@@ -154,6 +156,89 @@ class CommanderAgent:
             signals.append(f"[Detective] {detective_detail}")
         signals.append(f"[Commander] Threat severity: {alert.get('severity', 'unknown').upper()}")
         return signals
+
+    def _generate_recommendations(self, threat_type: str, severity: SeverityLevel, action: str) -> List[str]:
+        """Generate actionable recommendations based on threat type and severity."""
+        recs = []
+        if severity in (SeverityLevel.CRITICAL, SeverityLevel.HIGH):
+            recs.append(f"IMMEDIATE: {action}")
+
+        threat_recs = {
+            "brute_force": [
+                "Enable account lockout after 5 failed attempts",
+                "Implement multi-factor authentication (MFA)",
+                "Deploy rate limiting on authentication endpoints",
+                "Review and rotate potentially compromised credentials",
+            ],
+            "port_scan": [
+                "Review and minimize exposed services",
+                "Update firewall ACLs to restrict unnecessary ports",
+                "Enable port scan detection alerts",
+                "Consider honeypot deployment for reconnaissance detection",
+            ],
+            "sql_injection": [
+                "Enable parameterized queries on all database endpoints",
+                "Deploy WAF rules targeting SQL injection patterns",
+                "Audit application input validation routines",
+                "Review database user permissions (principle of least privilege)",
+            ],
+            "xss": [
+                "Implement Content Security Policy (CSP) headers",
+                "Sanitize all user inputs server-side",
+                "Enable HttpOnly and Secure flags on cookies",
+                "Deploy XSS filtering in WAF",
+            ],
+            "ransomware": [
+                "Immediately isolate infected hosts from network",
+                "Initiate backup restoration procedures",
+                "Preserve forensic evidence before remediation",
+                "Notify incident response team and management",
+            ],
+            "ddos": [
+                "Enable upstream DDoS mitigation service",
+                "Implement rate limiting at edge/CDN level",
+                "Scale infrastructure capacity if possible",
+                "Activate geo-blocking for suspicious regions",
+            ],
+            "data_exfiltration": [
+                "Block outbound connections to suspicious destinations",
+                "Enable Data Loss Prevention (DLP) monitoring",
+                "Review user access permissions and recent activity",
+                "Preserve network logs for forensic analysis",
+            ],
+            "mitm": [
+                "Force HSTS on all web endpoints",
+                "Validate SSL/TLS certificate chains",
+                "Enable certificate pinning where possible",
+                "Review ARP tables for anomalies",
+            ],
+            "dns_spoofing": [
+                "Enable DNSSEC on all domains",
+                "Flush DNS caches on affected systems",
+                "Monitor DNS query logs for anomalies",
+                "Consider DNS-over-HTTPS (DoH) deployment",
+            ],
+            "command_control": [
+                "Block identified C2 IP addresses at firewall",
+                "Run full endpoint forensic scan",
+                "Review scheduled tasks and startup items",
+                "Isolate potentially compromised hosts",
+            ],
+            "suspicious_login": [
+                "Force password reset for affected account",
+                "Verify user identity through secondary channel",
+                "Review recent account activity",
+                "Enable location-based access controls",
+            ],
+            "traffic_spike": [
+                "Enable rate limiting on affected services",
+                "Scale infrastructure capacity",
+                "Review traffic patterns for attack indicators",
+                "Prepare DDoS mitigation if pattern escalates",
+            ],
+        }
+        recs.extend(threat_recs.get(threat_type, ["Investigate source and review security logs", "Update firewall rules as needed"]))
+        return recs
 
     def _decide_action(
         self, severity: SeverityLevel, confidence: float, ip: str, threat_type: str

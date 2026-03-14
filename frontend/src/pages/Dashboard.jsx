@@ -12,6 +12,38 @@ import { useWebSocket } from '../services/websocket'
 import { StatCard, SeverityBadge, AgentDot, ConfidenceBar, Spinner, Timestamp } from '../components/ui'
 import { AgentCommunicationFeed } from '../components/AgentFeed'
 
+const ATTACK_TYPE_COLORS = {
+  brute_force:      '#ef4444',
+  port_scan:        '#22d3ee',
+  suspicious_login: '#a855f7',
+  data_exfiltration:'#eab308',
+  traffic_spike:    '#f97316',
+  malware:          '#dc2626',
+  ddos:             '#f97316',
+  sql_injection:    '#ef4444',
+  xss:              '#ec4899',
+  ransomware:       '#dc2626',
+  mitm:             '#8b5cf6',
+  dns_spoofing:     '#10b981',
+  command_control:  '#f59e0b',
+}
+
+const ATTACK_LABELS = {
+  brute_force:      'Brute Force',
+  port_scan:        'Port Scan',
+  suspicious_login: 'Suspicious Login',
+  data_exfiltration:'Data Exfil',
+  traffic_spike:    'Traffic Spike',
+  malware:          'Malware',
+  ddos:             'DDoS',
+  sql_injection:    'SQL Injection',
+  xss:              'XSS',
+  ransomware:       'Ransomware',
+  mitm:             'MITM',
+  dns_spoofing:     'DNS Spoof',
+  command_control:  'C2 Beacon',
+}
+
 // ── Threat Level Indicator ────────────────────────────────────────────
 function ThreatLevelIndicator({ data }) {
   const config = {
@@ -172,21 +204,29 @@ export default function Dashboard() {
     return () => clearInterval(id)
   }, [loadData])
 
-  // Build chart data from recent alerts
+  // Build chart data from real alerts (bucket by hour)
   useEffect(() => {
+    const now = new Date()
     const hours = Array.from({ length: 8 }, (_, i) => {
-      const h = new Date()
+      const h = new Date(now)
       h.setHours(h.getHours() - (7 - i), 0, 0, 0)
       return h
     })
-    const data = hours.map(h => ({
-      time: h.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      critical: Math.floor(Math.random() * 3),
-      high: Math.floor(Math.random() * 5),
-      medium: Math.floor(Math.random() * 8),
-    }))
+    const data = hours.map(h => {
+      const label = h.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+      const slot = recentAlerts.filter(a => {
+        const at = new Date(a.timestamp)
+        return at >= h && at < new Date(h.getTime() + 3600000)
+      })
+      return {
+        time: label,
+        critical: slot.filter(a => a.severity === 'critical').length,
+        high:     slot.filter(a => a.severity === 'high').length,
+        medium:   slot.filter(a => a.severity === 'medium' || a.severity === 'low').length,
+      }
+    })
     setChartData(data)
-  }, [])
+  }, [recentAlerts])
 
   // WS live updates
   const handleWsMessage = useCallback((msg) => {
@@ -303,7 +343,19 @@ export default function Dashboard() {
               <div key={a.id || i} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-800/20 transition-colors">
                 <SeverityBadge level={a.severity} />
                 <div className="flex-1 min-w-0">
-                  <p className="font-mono text-xs text-slate-300 truncate">{a.event}</p>
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                    <p className="font-mono text-xs text-slate-300 truncate">{a.event}</p>
+                    {a.threat_type && (
+                      <span className="shrink-0 font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border"
+                        style={{
+                          color: ATTACK_TYPE_COLORS[a.threat_type] || '#94a3b8',
+                          borderColor: (ATTACK_TYPE_COLORS[a.threat_type] || '#94a3b8') + '35',
+                          background: (ATTACK_TYPE_COLORS[a.threat_type] || '#94a3b8') + '10',
+                        }}>
+                        {ATTACK_LABELS[a.threat_type] || a.threat_type}
+                      </span>
+                    )}
+                  </div>
                   <p className="font-mono text-[11px] text-slate-600">
                     {a.source_ip} · <span className="text-slate-500">{a.agent}</span>
                   </p>

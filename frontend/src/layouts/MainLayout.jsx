@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Shield, Activity, Terminal, AlertTriangle,
   Zap, Database, LogOut, Wifi, WifiOff, ChevronRight,
-  Menu, X
+  Menu, X, FlaskConical
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { alertsAPI } from '../services/api'
@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { to: '/alerts',    label: 'Threat Alerts', Icon: AlertTriangle },
   { to: '/simulator', label: 'Simulator',     Icon: Zap },
   { to: '/responses', label: 'Responses',     Icon: Database },
+  { to: '/labs',      label: 'Labs',          Icon: FlaskConical },
 ]
 
 const LEVEL_COLORS = {

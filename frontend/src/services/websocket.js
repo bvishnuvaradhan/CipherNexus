@@ -22,10 +22,16 @@ export function useWebSocket(onMessage) {
           clearTimeout(reconnectTimer.current)
           reconnectTimer.current = null
         }
+        // Client-side ping keepalive to prevent silent disconnects
+        ws._pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send('ping')
+        }, 25000)
       }
 
       ws.onmessage = (event) => {
         try {
+          // Ignore pong responses
+          if (event.data === 'pong') return
           const data = JSON.parse(event.data)
           onMessageRef.current?.(data)
         } catch (e) {
@@ -35,6 +41,7 @@ export function useWebSocket(onMessage) {
 
       ws.onclose = () => {
         console.log('🔌 WebSocket disconnected — reconnecting in 3s')
+        if (ws._pingInterval) clearInterval(ws._pingInterval)
         reconnectTimer.current = setTimeout(connect, 3000)
       }
 

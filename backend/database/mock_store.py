@@ -49,8 +49,8 @@ class InMemoryCollection:
             for key, direction in reversed(sort):
                 results.sort(key=lambda x: x.get(key, ""), reverse=(direction == -1))
         if limit:
-            results = results[-limit:]
-        return list(reversed(results))
+            results = results[:limit]
+        return results
 
     async def find_one(self, query: Dict = None) -> Optional[Dict]:
         results = await self.find(query)
