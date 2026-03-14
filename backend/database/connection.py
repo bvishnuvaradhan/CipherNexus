@@ -54,6 +54,12 @@ async def _ensure_indexes():
     await _db.responses.create_index([("timestamp", -1)])
     await _db.agent_messages.create_index([("timestamp", -1)])
     await _db.attacks.create_index([("timestamp", -1)])
+    await _db.report_schedules.create_index([("next_run_at", 1)])
+    await _db.report_schedules.create_index([("enabled", 1), ("next_run_at", 1)])
+    await _db.scheduled_reports.create_index([("generated_at", -1)])
+    await _db.email_report_schedules.create_index([("next_run_at", 1)])
+    await _db.email_report_schedules.create_index([("enabled", 1), ("next_run_at", 1)])
+    await _db.email_report_runs.create_index([("sent_at", -1)])
 
 
 # ---------------------------------------------------------------------------

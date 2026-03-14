@@ -163,13 +163,14 @@ export function Timestamp({ value }) {
     ts = ts + 'Z'
   }
   const d = new Date(ts)
-  // Use local time formatting
-  const time = d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  const date = d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' })
+  // Show IST only
+  const fmtIst = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', month: 'short', day: '2-digit'
+  })
+  const ist = fmtIst.format(d)
   return (
     <span className="font-mono text-xs text-slate-500">
-      <span className="text-slate-400">{time}</span>
-      <span className="text-slate-700 ml-1">{date}</span>
+      <span className="text-slate-400">IST {ist}</span>
     </span>
   )
 }

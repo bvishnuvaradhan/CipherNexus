@@ -126,6 +126,10 @@ class AgentOrchestrator:
 
         while True:
             await asyncio.sleep(10)
+            try:
+                await self.commander.reconcile_lifecycle_timeouts()
+            except Exception as e:
+                print(f"[WARN] Lifecycle reconciliation error: {e}")
             if self._ws_manager:
                 try:
                     threat = await get_threat_level()

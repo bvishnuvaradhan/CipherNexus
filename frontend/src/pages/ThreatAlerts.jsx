@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { AlertTriangle, RefreshCw, Bell, ChevronDown, ChevronUp, FileText, Brain, Shield, Clock, Loader } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Bell, ChevronDown, ChevronUp, FileText, Brain, Shield, Clock, Loader, CalendarClock } from 'lucide-react'
 import { alertsAPI, logsAPI } from '../services/api'
 import { useWebSocket } from '../services/websocket'
 import { SeverityBadge, StatusBadge, PageHeader, Spinner, EmptyState, Timestamp, StatCard, ConfidenceBar } from '../components/ui'
@@ -226,7 +226,10 @@ export default function ThreatAlerts() {
 
   const load = useCallback(async () => {
     try {
-      const [a, s] = await Promise.allSettled([alertsAPI.list(100), alertsAPI.stats()])
+      const [a, s] = await Promise.allSettled([
+        alertsAPI.list(100),
+        alertsAPI.stats(),
+      ])
       if (a.status === 'fulfilled') setAlerts((a.value.data.alerts || []).slice(0, 100))
       if (s.status === 'fulfilled') setStats(s.value.data)
     } finally { setLoading(false) }
@@ -322,6 +325,7 @@ export default function ThreatAlerts() {
       setDownloadingReport(false)
     }
   }, [reportFrom, reportTo, severityFilter, reportCategories])
+
 
   return (
     <div className="p-4 lg:p-6 space-y-5 animate-fade-in">
@@ -446,6 +450,8 @@ export default function ThreatAlerts() {
           Exports alert records and commander analysis for the selected period and chosen categories.
         </p>
       </div>
+
+      
 
       {/* Alerts table */}
       <div className="cyber-card overflow-hidden">

@@ -5,6 +5,7 @@ import {
   Zap, Database, LogOut, Wifi, WifiOff, ChevronRight,
   Menu, X, FlaskConical
 } from 'lucide-react'
+import { Mail } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { alertsAPI } from '../services/api'
 import { useWebSocket } from '../services/websocket'
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { to: '/simulator', label: 'Simulator',     Icon: Zap },
   { to: '/responses', label: 'Responses',     Icon: Database },
   { to: '/labs',      label: 'Labs',          Icon: FlaskConical },
+  { to: '/reports-email', label: 'Email Reports', Icon: Mail },
 ]
 
 const LEVEL_COLORS = {

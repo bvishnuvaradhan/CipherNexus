@@ -1,78 +1,39 @@
 """Alerts REST endpoints."""
 
-import csv
-import io
 from datetime import datetime, timedelta
+from uuid import uuid4
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import Response
-from typing import Optional
-from database.repository import get_alerts, get_threat_level, count_documents, fetch_recent, fetch_one
+from pydantic import BaseModel, Field
+from typing import Literal, Optional
+from database.repository import (
+    count_documents,
+    fetch_one,
+    fetch_recent,
+    get_alerts,
+    get_threat_level,
+    insert_document,
+    update_document,
+)
+from services.reporting import build_report_csv_content, find_incident_commander_response, parse_iso_datetime
+from services.report_scheduler import materialize_scheduled_report
 
 router = APIRouter()
 
 
-def _response_priority(response: dict) -> tuple[int, int, str]:
-    action = str(response.get("action", "") or "")
-    has_recommendations = bool(response.get("recommendations"))
-    is_auto_resolve = action.startswith("Auto-resolve")
-    timestamp = str(response.get("timestamp", "") or "")
-    return (0 if has_recommendations else 1, 0 if not is_auto_resolve else 1, timestamp)
+FREQUENCY_TO_DELTA = {
+    "hourly": timedelta(hours=1),
+    "daily": timedelta(days=1),
+    "weekly": timedelta(days=7),
+}
 
 
-def _pick_best_response(responses: list[dict]) -> Optional[dict]:
-    if not responses:
-        return None
-    return min(responses, key=_response_priority)
-
-
-async def _find_incident_commander_response(alert: dict) -> Optional[dict]:
-    direct_responses = await fetch_recent("responses", limit=50, query={"related_alert_id": alert.get("id")})
-    best_direct = _pick_best_response(direct_responses)
-    if best_direct:
-        return best_direct
-
-    details = alert.get("details") if isinstance(alert.get("details"), dict) else {}
-    linked_alert_id = details.get("related_alert_id") or details.get("parent_alert_id")
-    if linked_alert_id:
-        linked_responses = await fetch_recent("responses", limit=50, query={"related_alert_id": linked_alert_id})
-        best_linked = _pick_best_response(linked_responses)
-        if best_linked:
-            return best_linked
-
-    source_ip = alert.get("source_ip")
-    threat_type = alert.get("threat_type")
-    timestamp = alert.get("timestamp")
-
-    if not source_ip or not threat_type or not isinstance(timestamp, str):
-        return None
-
-    try:
-        center = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-    sibling_alerts = await fetch_recent(
-        "alerts",
-        limit=50,
-        query={
-            "source_ip": source_ip,
-            "threat_type": threat_type,
-            "timestamp": {
-                "$gte": (center - timedelta(minutes=5)).isoformat(),
-                "$lte": (center + timedelta(minutes=5)).isoformat(),
-            },
-        },
-    )
-    sibling_ids = [item.get("id") for item in sibling_alerts if item.get("id")]
-    if not sibling_ids:
-        return None
-
-    sibling_responses = await fetch_recent(
-        "responses",
-        limit=100,
-        query={"related_alert_id": {"$in": sibling_ids}},
-    )
-    return _pick_best_response(sibling_responses)
+class ReportScheduleCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=64)
+    frequency: Literal["hourly", "daily", "weekly"] = "daily"
+    lookback_hours: int = Field(default=24, ge=1, le=24 * 14)
+    severity: Optional[Literal["critical", "high", "medium", "low"]] = None
+    threat_types: list[str] = Field(default_factory=list)
 
 # Recommendations by threat type
 THREAT_RECOMMENDATIONS = {
@@ -176,14 +137,6 @@ async def alert_stats():
     }
 
 
-def _safe_text(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        return str(value)
-    return str(value)
-
-
 @router.get("/report.csv")
 async def download_alert_report_csv(
     start_time: str = Query(..., description="ISO timestamp inclusive start"),
@@ -193,96 +146,139 @@ async def download_alert_report_csv(
 ):
     """Generate a CSV report of alerts for the selected period."""
     try:
-        start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-        end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+        start_dt = parse_iso_datetime(start_time)
+        end_dt = parse_iso_datetime(end_time)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid start_time or end_time format")
 
     if start_dt > end_dt:
         raise HTTPException(status_code=400, detail="start_time must be <= end_time")
 
-    alert_query = {
-        "timestamp": {
-            "$gte": start_dt.isoformat(),
-            "$lte": end_dt.isoformat(),
-        }
-    }
-    if severity:
-        alert_query["severity"] = severity
-
     selected_threat_types: list[str] = []
     if threat_types:
         selected_threat_types = [item.strip() for item in threat_types.split(",") if item and item.strip()]
-        if selected_threat_types:
-            alert_query["threat_type"] = {"$in": selected_threat_types}
-
-    alerts = await fetch_recent("alerts", limit=5000, query=alert_query)
-    alert_ids = [a.get("id") for a in alerts if a.get("id")]
-
-    responses_by_id: dict[str, list[dict]] = {}
-    if alert_ids:
-        responses = await fetch_recent(
-            "responses",
-            limit=10000,
-            query={"related_alert_id": {"$in": alert_ids}},
-        )
-        for response in responses:
-            related_id = response.get("related_alert_id")
-            if not related_id:
-                continue
-            responses_by_id.setdefault(related_id, []).append(response)
-
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow([
-        "timestamp",
-        "alert_id",
-        "agent",
-        "event",
-        "threat_type",
-        "severity",
-        "status",
-        "source_ip",
-        "target",
-        "confidence",
-        "commander_action",
-        "commander_status",
-        "commander_confidence",
-        "commander_reasoning",
-        "recommendations",
-        "signals",
-    ])
-
-    for alert in alerts:
-        response = _pick_best_response(responses_by_id.get(alert.get("id", ""), []))
-        if response is None:
-            response = await _find_incident_commander_response(alert)
-        recommendations = response.get("recommendations") if response else []
-        signals = response.get("signals") if response else []
-
-        writer.writerow([
-            _safe_text(alert.get("timestamp")),
-            _safe_text(alert.get("id")),
-            _safe_text(alert.get("agent")),
-            _safe_text(alert.get("event")),
-            _safe_text(alert.get("threat_type")),
-            _safe_text(alert.get("severity")),
-            _safe_text(alert.get("status")),
-            _safe_text(alert.get("source_ip")),
-            _safe_text(alert.get("target")),
-            _safe_text(alert.get("confidence")),
-            _safe_text(response.get("action") if response else ""),
-            _safe_text(response.get("status") if response else ""),
-            _safe_text(response.get("confidence") if response else ""),
-            _safe_text(response.get("reasoning") if response else ""),
-            " | ".join([_safe_text(item) for item in (recommendations or [])]),
-            " | ".join([_safe_text(item) for item in (signals or [])]),
-        ])
-
-    csv_content = out.getvalue()
-    out.close()
+    csv_content, _ = await build_report_csv_content(
+        start_dt=start_dt,
+        end_dt=end_dt,
+        severity=severity,
+        threat_types=selected_threat_types,
+    )
 
     filename = f"threat_alerts_report_{start_dt.strftime('%Y%m%d_%H%M')}_to_{end_dt.strftime('%Y%m%d_%H%M')}.csv"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=csv_content, media_type="text/csv", headers=headers)
+
+
+@router.get("/report-schedules")
+async def list_report_schedules():
+    schedules = await fetch_recent(
+        "report_schedules",
+        limit=200,
+        query={"deleted": {"$ne": True}},
+        sort_field="created_at",
+    )
+    return {"schedules": schedules, "total": len(schedules)}
+
+
+@router.post("/report-schedules")
+async def create_report_schedule(payload: ReportScheduleCreate):
+    now = datetime.utcnow()
+    schedule_id = str(uuid4())
+    delta = FREQUENCY_TO_DELTA.get(payload.frequency, timedelta(days=1))
+    sanitized_threat_types = sorted({item.strip() for item in payload.threat_types if item and item.strip()})
+
+    doc = {
+        "id": schedule_id,
+        "name": payload.name,
+        "frequency": payload.frequency,
+        "lookback_hours": payload.lookback_hours,
+        "severity": payload.severity,
+        "threat_types": sanitized_threat_types,
+        "enabled": True,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "last_run_at": None,
+        "next_run_at": (now + delta).isoformat(),
+    }
+    await insert_document("report_schedules", doc)
+    return {"ok": True, "schedule": doc}
+
+
+@router.patch("/report-schedules/{schedule_id}")
+async def update_report_schedule(schedule_id: str, enabled: Optional[bool] = Query(None)):
+    existing = await fetch_one("report_schedules", {"id": schedule_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Report schedule not found")
+
+    patch = {"updated_at": datetime.utcnow().isoformat()}
+    if enabled is not None:
+        patch["enabled"] = enabled
+        if enabled:
+            frequency = str(existing.get("frequency", "daily") or "daily").lower()
+            patch["next_run_at"] = (datetime.utcnow() + FREQUENCY_TO_DELTA.get(frequency, timedelta(days=1))).isoformat()
+
+    await update_document("report_schedules", {"id": schedule_id}, {"$set": patch})
+    updated = await fetch_one("report_schedules", {"id": schedule_id})
+    return {"ok": True, "schedule": updated}
+
+
+@router.delete("/report-schedules/{schedule_id}")
+async def delete_report_schedule(schedule_id: str):
+    existing = await fetch_one("report_schedules", {"id": schedule_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Report schedule not found")
+
+    await update_document(
+        "report_schedules",
+        {"id": schedule_id},
+        {"$set": {"enabled": False, "deleted": True, "updated_at": datetime.utcnow().isoformat()}},
+    )
+    return {"ok": True}
+
+
+@router.post("/report-schedules/{schedule_id}/run-now")
+async def run_report_schedule_now(schedule_id: str):
+    schedule = await fetch_one("report_schedules", {"id": schedule_id, "deleted": {"$ne": True}})
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Report schedule not found")
+
+    report_meta = await materialize_scheduled_report(schedule)
+    return {"ok": True, "report": report_meta}
+
+
+@router.get("/scheduled-reports")
+async def list_scheduled_reports(schedule_id: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=200)):
+    query = {"deleted": {"$ne": True}}
+    if schedule_id:
+        query["schedule_id"] = schedule_id
+    reports = await fetch_recent("scheduled_reports", limit=limit, query=query, sort_field="generated_at")
+    for report in reports:
+        report.pop("csv_content", None)
+    return {"reports": reports, "total": len(reports)}
+
+
+@router.delete("/scheduled-reports/{report_id}")
+async def delete_scheduled_report(report_id: str):
+    report = await fetch_one("scheduled_reports", {"id": report_id})
+    if not report:
+        raise HTTPException(status_code=404, detail="Scheduled report not found")
+
+    await update_document(
+        "scheduled_reports",
+        {"id": report_id},
+        {"$set": {"deleted": True, "updated_at": datetime.utcnow().isoformat()}},
+    )
+    return {"ok": True}
+
+
+@router.get("/scheduled-reports/{report_id}/download")
+async def download_scheduled_report(report_id: str):
+    report = await fetch_one("scheduled_reports", {"id": report_id})
+    if not report:
+        raise HTTPException(status_code=404, detail="Scheduled report not found")
+
+    csv_content = str(report.get("csv_content", ""))
+    filename = str(report.get("filename") or f"scheduled_report_{report_id}.csv")
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return Response(content=csv_content, media_type="text/csv", headers=headers)
 
@@ -294,7 +290,7 @@ async def get_alert_detail(alert_id: str):
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    response = await _find_incident_commander_response(alert)
+    response = await find_incident_commander_response(alert)
 
     # Generate recommendations
     threat_type = alert.get("threat_type", "")

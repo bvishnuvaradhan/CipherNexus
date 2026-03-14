@@ -6,6 +6,10 @@ FastAPI Backend - Main Application Entry Point
 import asyncio
 import os
 import uvicorn
+from dotenv import load_dotenv
+
+# Load environment variables from backend/.env when present
+load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -20,8 +24,10 @@ from routes.data import router as data_router
 from routes.ml import router as ml_router
 from routes.auth import router as auth_router
 from routes.labs import router as labs_router
+from routes.report_email import router as report_email_router
 from websocket.manager import websocket_router, manager as ws_manager
 from agents.orchestrator import AgentOrchestrator
+from services.report_scheduler import ReportScheduler
 
 
 @asynccontextmanager
@@ -34,6 +40,9 @@ async def lifespan(app: FastAPI):
     app.state.orchestrator = orchestrator
     await orchestrator.initialize()
     asyncio.create_task(orchestrator.run_core_services())
+    report_scheduler = ReportScheduler()
+    await report_scheduler.start()
+    app.state.report_scheduler = report_scheduler
     auto_monitoring = os.getenv("AUTO_MONITORING", "false").lower() == "true"
     if auto_monitoring:
         asyncio.create_task(orchestrator.run_continuous_monitoring())
@@ -43,6 +52,7 @@ async def lifespan(app: FastAPI):
     print("[OK] AI Cyber Defense System initialized - all agents online")
     yield
     # Shutdown
+    await app.state.report_scheduler.stop()
     await close_mongo_connection()
     print("[OK] System shutdown - agents offline")
 
@@ -72,6 +82,7 @@ app.include_router(simulator_router, prefix="/simulate-attack", tags=["Simulator
 app.include_router(data_router, prefix="/data", tags=["Data"])
 app.include_router(ml_router, prefix="/ml", tags=["ML"])
 app.include_router(labs_router, prefix="/labs", tags=["Labs"])
+app.include_router(report_email_router, prefix="/email-reports", tags=["Email Reports"])
 app.include_router(websocket_router, tags=["WebSocket"])
 
 

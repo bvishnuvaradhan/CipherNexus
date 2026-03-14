@@ -23,6 +23,7 @@ from database.repository import (
     update_incident_alerts_status,
     mark_attacks_mitigated,
     fetch_one,
+    fetch_recent,
     resolve_monitoring_responses_for_alert,
     resolve_blocked_responses_for_alert,
 )
@@ -71,6 +72,7 @@ class CommanderAgent:
         self._forensics: Any = None
         self.start_time = datetime.utcnow()
         self._blocked_ips: set = set()
+        self._lifecycle_reconcile_inflight: set[str] = set()
         self._ws_manager: Any = None  # injected for live push
 
     def attach_bus(self, bus):
@@ -465,6 +467,88 @@ class CommanderAgent:
                 "target": target,
             },
         )
+
+    async def reconcile_lifecycle_timeouts(self) -> None:
+        """Recover lifecycle timers after reloads by resolving overdue incidents from persisted state."""
+        now = datetime.utcnow()
+
+        investigating_alerts = await fetch_recent(
+            "alerts",
+            limit=200,
+            query={"status": "investigating"},
+            sort_field="updated_at",
+        )
+        for alert in investigating_alerts:
+            await self._reconcile_investigating_alert(alert, now)
+
+        blocked_alerts = await fetch_recent(
+            "alerts",
+            limit=200,
+            query={"status": "blocked"},
+            sort_field="updated_at",
+        )
+        for alert in blocked_alerts:
+            await self._reconcile_blocked_alert(alert, now)
+
+    def _parse_iso(self, value: Any) -> Optional[datetime]:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            return None
+
+    async def _run_reconcile_action(self, alert_id: str, action_coro) -> None:
+        if not alert_id or alert_id in self._lifecycle_reconcile_inflight:
+            return
+        self._lifecycle_reconcile_inflight.add(alert_id)
+        try:
+            await action_coro
+        finally:
+            self._lifecycle_reconcile_inflight.discard(alert_id)
+
+    async def _reconcile_investigating_alert(self, alert: Dict[str, Any], now: datetime) -> None:
+        alert_id = str(alert.get("id") or "")
+        lifecycle = alert.get("lifecycle") if isinstance(alert.get("lifecycle"), dict) else {}
+        if not lifecycle:
+            return
+
+        anchor = self._parse_iso(alert.get("updated_at")) or self._parse_iso(alert.get("timestamp"))
+        if not anchor:
+            return
+
+        elapsed = (now - anchor).total_seconds()
+        target = str(lifecycle.get("target") or alert.get("source_ip") or "unknown")
+
+        auto_block_seconds = lifecycle.get("auto_block_seconds")
+        if isinstance(auto_block_seconds, int) and elapsed >= auto_block_seconds:
+            await self._run_reconcile_action(alert_id, self._auto_block_bruteforce_alert(alert_id, target, 0))
+            return
+
+        auto_resolve_seconds = lifecycle.get("auto_resolve_seconds")
+        if isinstance(auto_resolve_seconds, int) and elapsed >= auto_resolve_seconds:
+            await self._run_reconcile_action(alert_id, self._auto_resolve_monitoring_alert(alert_id, target, 0))
+
+    async def _reconcile_blocked_alert(self, alert: Dict[str, Any], now: datetime) -> None:
+        alert_id = str(alert.get("id") or "")
+        lifecycle = alert.get("lifecycle") if isinstance(alert.get("lifecycle"), dict) else {}
+        if not lifecycle:
+            return
+
+        auto_unblock_seconds = lifecycle.get("auto_unblock_seconds")
+        if not isinstance(auto_unblock_seconds, int):
+            return
+
+        anchor = self._parse_iso(alert.get("updated_at")) or self._parse_iso(alert.get("timestamp"))
+        if not anchor:
+            return
+
+        elapsed = (now - anchor).total_seconds()
+        if elapsed < auto_unblock_seconds:
+            return
+
+        target = str(lifecycle.get("target") or alert.get("source_ip") or "unknown")
+        await self._run_reconcile_action(alert_id, self._auto_resolve_blocked_alert(alert_id, target, 0))
 
     # ------------------------------------------------------------------
     # Explainable AI

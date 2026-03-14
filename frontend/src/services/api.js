@@ -73,6 +73,17 @@ export const alertsAPI = {
       },
       responseType: 'blob',
     }),
+  listReportSchedules: () => api.get('/alerts/report-schedules'),
+  createReportSchedule: (payload) => api.post('/alerts/report-schedules', payload),
+  updateReportSchedule: (scheduleId, enabled) =>
+    api.patch(`/alerts/report-schedules/${scheduleId}`, null, { params: { enabled } }),
+  deleteReportSchedule: (scheduleId) => api.delete(`/alerts/report-schedules/${scheduleId}`),
+  runReportScheduleNow: (scheduleId) => api.post(`/alerts/report-schedules/${scheduleId}/run-now`),
+  listScheduledReports: (scheduleId = null, limit = 20) =>
+    api.get('/alerts/scheduled-reports', { params: { limit, ...(scheduleId ? { schedule_id: scheduleId } : {}) } }),
+  downloadScheduledReport: (reportId) =>
+    api.get(`/alerts/scheduled-reports/${reportId}/download`, { responseType: 'blob' }),
+  deleteScheduledReport: (reportId) => api.delete(`/alerts/scheduled-reports/${reportId}`),
 }
 
 // ── Logs ──────────────────────────────────────────────────────────────────
@@ -141,6 +152,17 @@ export const mlAPI = {
   status:   () => api.get('/ml/status'),
   getConfig: () => api.get('/ml/config'),
   setConfig: (anomalyThreshold) => api.post('/ml/config', { anomaly_threshold: anomalyThreshold }),
+}
+
+// ── Email Reports ─────────────────────────────────────────────────────────
+export const emailReportsAPI = {
+  contacts: () => api.get('/email-reports/contacts'),
+  listSchedules: () => api.get('/email-reports/schedules'),
+  createSchedule: (payload) => api.post('/email-reports/schedules', payload),
+  toggleSchedule: (scheduleId, enabled) =>
+    api.patch(`/email-reports/schedules/${scheduleId}`, null, { params: { enabled } }),
+  deleteSchedule: (scheduleId) => api.delete(`/email-reports/schedules/${scheduleId}`),
+  listRuns: (limit = 30) => api.get('/email-reports/runs', { params: { limit } }),
 }
 
 export default api

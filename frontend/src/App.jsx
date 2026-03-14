@@ -11,6 +11,7 @@ import ThreatAlerts from './pages/ThreatAlerts'
 import Simulator from './pages/Simulator'
 import Responses from './pages/Responses'
 import Labs from './pages/Labs'
+import ReportsEmail from './pages/ReportsEmail'
 import HackerLogin from './pages/HackerLogin'
 import HackerConsole from './pages/HackerConsole'
 
@@ -56,6 +57,7 @@ function AppRoutes() {
         <Route path="simulator" element={<Simulator />} />
         <Route path="responses" element={<Responses />} />
         <Route path="labs" element={<Labs />} />
+        <Route path="reports-email" element={<ReportsEmail />} />
       </Route>
 
       {/* ── Hacker Console routes (separate, standalone) ─────────── */}
