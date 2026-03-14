@@ -352,9 +352,9 @@ VITE_WS_URL=ws://localhost:8000/ws/alerts
 
 ---
 
-## 🧪 Running Without MongoDB
+## 🧪 MongoDB Requirement
 
-The backend includes a full **in-memory mock store** that activates automatically when MongoDB is unreachable. All features work identically — data resets on restart.
+The backend now runs in **strict MongoDB mode**. If MongoDB is unavailable, backend startup fails and no in-memory mock data is used.
 
 ---
 

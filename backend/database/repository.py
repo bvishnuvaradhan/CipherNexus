@@ -1,7 +1,4 @@
-"""
-Repository layer — abstracts MongoDB vs in-memory store.
-All agents and routes use these helpers exclusively.
-"""
+"""Repository layer — strict MongoDB-backed data access."""
 
 from __future__ import annotations
 import copy
@@ -10,20 +7,13 @@ from typing import Any, Dict, List, Optional
 from bson import ObjectId
 
 from database.connection import get_db
-from database.mock_store import get_mock_collection
 
 
 def _col(name: str):
-    """Return the real collection or the mock one."""
     db = get_db()
-    if db is not None:
-        return db[name]
-    return get_mock_collection(name)
-
-
-def _mock_col(name: str):
-    """Return the in-memory fallback collection."""
-    return get_mock_collection(name)
+    if db is None:
+        raise RuntimeError("MongoDB is not connected")
+    return db[name]
 
 
 def _serialize_doc(doc: Dict) -> Dict:
@@ -49,14 +39,8 @@ async def insert_document(collection: str, document: Dict) -> str:
     col = _col(collection)
     # pymongo may inject `_id` into the passed dict; keep caller payload immutable.
     payload = copy.deepcopy(document)
-    try:
-        result = await col.insert_one(payload)
-        return str(result.inserted_id)
-    except Exception as e:
-        print(f"[WARN] DB insert failed for '{collection}', switching to mock store: {e}")
-        fallback = _mock_col(collection)
-        result = await fallback.insert_one(payload)
-        return str(result.inserted_id)
+    result = await col.insert_one(payload)
+    return str(result.inserted_id)
 
 
 async def fetch_recent(
@@ -66,43 +50,22 @@ async def fetch_recent(
     sort_field: str = "timestamp",
 ) -> List[Dict]:
     q = query or {}
-    db = get_db()
-
-    try:
-        if db is not None:
-            col = db[collection]
-            cursor = col.find(q).sort(sort_field, -1).limit(limit)
-            docs = await cursor.to_list(length=limit)
-        else:
-            col = _mock_col(collection)
-            docs = await col.find(q, sort=[(sort_field, -1)], limit=limit)
-    except Exception as e:
-        print(f"[WARN] DB read failed for '{collection}', switching to mock store: {e}")
-        col = _mock_col(collection)
-        docs = await col.find(q, sort=[(sort_field, -1)], limit=limit)
+    col = _col(collection)
+    cursor = col.find(q).sort(sort_field, -1).limit(limit)
+    docs = await cursor.to_list(length=limit)
 
     return [_serialize_doc(doc) for doc in docs]
 
 
 async def count_documents(collection: str, query: Optional[Dict] = None) -> int:
     q = query or {}
-    try:
-        col = _col(collection)
-        return await col.count_documents(q)
-    except Exception as e:
-        print(f"[WARN] DB count failed for '{collection}', switching to mock store: {e}")
-        col = _mock_col(collection)
-        return await col.count_documents(q)
+    col = _col(collection)
+    return await col.count_documents(q)
 
 
 async def update_document(collection: str, query: Dict, update: Dict) -> None:
-    try:
-        col = _col(collection)
-        await col.update_one(query, update)
-    except Exception as e:
-        print(f"[WARN] DB update failed for '{collection}', switching to mock store: {e}")
-        col = _mock_col(collection)
-        await col.update_one(query, update)
+    col = _col(collection)
+    await col.update_one(query, update)
 
 
 async def clear_collections(collections: Optional[List[str]] = None) -> Dict[str, int]:
@@ -110,17 +73,13 @@ async def clear_collections(collections: Optional[List[str]] = None) -> Dict[str
     names = collections or ["alerts", "logs", "agent_messages", "responses", "attacks"]
     result: Dict[str, int] = {}
     db = get_db()
+    if db is None:
+        raise RuntimeError("MongoDB is not connected")
 
     for name in names:
         try:
-            if db is not None:
-                delete_result = await db[name].delete_many({})
-                result[name] = int(delete_result.deleted_count)
-            else:
-                col = _mock_col(name)
-                count_before = await col.count_documents({})
-                await col.delete_many({})
-                result[name] = int(count_before)
+            delete_result = await db[name].delete_many({})
+            result[name] = int(delete_result.deleted_count)
         except Exception as e:
             print(f"[WARN] Failed to clear collection '{name}': {e}")
             result[name] = -1

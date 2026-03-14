@@ -31,10 +31,11 @@ async def connect_to_mongo():
         await _client.admin.command("ping")
         print(f"[OK] MongoDB connected: {MONGO_URL}/{DB_NAME}")
         await _ensure_indexes()
-    except ServerSelectionTimeoutError:
-        print("[WARN] MongoDB unavailable - running in in-memory mock mode")
+    except ServerSelectionTimeoutError as e:
+        print("[ERROR] MongoDB unavailable - strict MongoDB mode enabled")
         _client = None
         _db = None
+        raise RuntimeError("MongoDB connection failed. Start MongoDB and retry.") from e
 
 
 async def close_mongo_connection():
