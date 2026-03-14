@@ -12,19 +12,36 @@ import { useWebSocket } from '../services/websocket'
 import { StatCard, SeverityBadge, AgentDot, ConfidenceBar, Spinner, Timestamp } from '../components/ui'
 import { AgentCommunicationFeed } from '../components/AgentFeed'
 
-const DEFAULT_AGENTS = [
-  { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0 },
-  { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0 },
-  { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0 },
-  { name: 'Threat Intelligence', role: 'Threat Intelligence', status: 'online', threat_count: 0, confidence_avg: 0 },
-  { name: 'Anomaly Detection', role: 'Behavioral Analytics', status: 'online', threat_count: 0, confidence_avg: 0 },
-  { name: 'Response Automation', role: 'Defensive Execution', status: 'online', threat_count: 0, confidence_avg: 0 },
-  { name: 'Forensics', role: 'Incident Investigation', status: 'online', threat_count: 0, confidence_avg: 0 },
-]
+const ATTACK_TYPE_COLORS = {
+  brute_force:      '#ef4444',
+  port_scan:        '#22d3ee',
+  suspicious_login: '#a855f7',
+  data_exfiltration:'#eab308',
+  traffic_spike:    '#f97316',
+  malware:          '#dc2626',
+  ddos:             '#f97316',
+  sql_injection:    '#ef4444',
+  xss:              '#ec4899',
+  ransomware:       '#dc2626',
+  mitm:             '#8b5cf6',
+  dns_spoofing:     '#10b981',
+  command_control:  '#f59e0b',
+}
 
-function mergeAgentsWithDefaults(liveAgents = []) {
-  const byName = new Map((liveAgents || []).map((a) => [a.name, a]))
-  return DEFAULT_AGENTS.map((base) => ({ ...base, ...(byName.get(base.name) || {}) }))
+const ATTACK_LABELS = {
+  brute_force:      'Brute Force',
+  port_scan:        'Port Scan',
+  suspicious_login: 'Suspicious Login',
+  data_exfiltration:'Data Exfil',
+  traffic_spike:    'Traffic Spike',
+  malware:          'Malware',
+  ddos:             'DDoS',
+  sql_injection:    'SQL Injection',
+  xss:              'XSS',
+  ransomware:       'Ransomware',
+  mitm:             'MITM',
+  dns_spoofing:     'DNS Spoof',
+  command_control:  'C2 Beacon',
 }
 
 // ── Threat Level Indicator ────────────────────────────────────────────
@@ -85,19 +102,12 @@ function AgentCard({ agent }) {
     Sentry:    'cyan',
     Detective: 'purple',
     Commander: 'yellow',
-    'Threat Intelligence': 'rose',
-    'Anomaly Detection': 'emerald',
-    'Response Automation': 'orange',
-    Forensics: 'purple',
   }
   const color = agentColors[agent.name] || 'cyan'
   const colorMap = {
     cyan:   { text: 'text-cyan-400',   ring: 'ring-cyan-500/20', bg: 'bg-cyan-500/10' },
     purple: { text: 'text-purple-400', ring: 'ring-purple-500/20', bg: 'bg-purple-500/10' },
     yellow: { text: 'text-yellow-400', ring: 'ring-yellow-500/20', bg: 'bg-yellow-500/10' },
-    rose:   { text: 'text-rose-400', ring: 'ring-rose-500/20', bg: 'bg-rose-500/10' },
-    emerald:{ text: 'text-emerald-400', ring: 'ring-emerald-500/20', bg: 'bg-emerald-500/10' },
-    orange: { text: 'text-orange-400', ring: 'ring-orange-500/20', bg: 'bg-orange-500/10' },
   }
   const c = colorMap[color]
 
@@ -159,10 +169,9 @@ export default function Dashboard() {
   const [threatLevel, setThreatLevel] = useState({ level: 'LOW', score: 0, active_alerts: 0 })
   const [alertStats, setAlertStats] = useState({})
   const [responseStats, setResponseStats] = useState({})
-  const [agents, setAgents] = useState(DEFAULT_AGENTS)
+  const [agents, setAgents] = useState([])
   const [recentAlerts, setRecentAlerts] = useState([])
   const [agentMessages, setAgentMessages] = useState([])
-  const [mlPredictions, setMlPredictions] = useState([])
   const [chartData, setChartData] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -179,7 +188,7 @@ export default function Dashboard() {
       if (tl.status === 'fulfilled') setThreatLevel(tl.value.data)
       if (stats.status === 'fulfilled') setAlertStats(stats.value.data)
       if (rStats.status === 'fulfilled') setResponseStats(rStats.value.data)
-      if (ag.status === 'fulfilled') setAgents(mergeAgentsWithDefaults(ag.value.data.agents || []))
+      if (ag.status === 'fulfilled') setAgents(ag.value.data.agents || [])
       if (alerts.status === 'fulfilled') setRecentAlerts(alerts.value.data.alerts || [])
       if (msgs.status === 'fulfilled') setAgentMessages(msgs.value.data.messages || [])
     } finally {
@@ -195,31 +204,36 @@ export default function Dashboard() {
     return () => clearInterval(id)
   }, [loadData])
 
-  // Build chart data from recent alerts
+  // Build chart data from real alerts (bucket by hour)
   useEffect(() => {
+    const now = new Date()
     const hours = Array.from({ length: 8 }, (_, i) => {
-      const h = new Date()
+      const h = new Date(now)
       h.setHours(h.getHours() - (7 - i), 0, 0, 0)
       return h
     })
-    const data = hours.map(h => ({
-      time: h.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      critical: Math.floor(Math.random() * 3),
-      high: Math.floor(Math.random() * 5),
-      medium: Math.floor(Math.random() * 8),
-    }))
+    const data = hours.map(h => {
+      const label = h.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+      const slot = recentAlerts.filter(a => {
+        const at = new Date(a.timestamp)
+        return at >= h && at < new Date(h.getTime() + 3600000)
+      })
+      return {
+        time: label,
+        critical: slot.filter(a => a.severity === 'critical').length,
+        high:     slot.filter(a => a.severity === 'high').length,
+        medium:   slot.filter(a => a.severity === 'medium' || a.severity === 'low').length,
+      }
+    })
     setChartData(data)
-  }, [])
+  }, [recentAlerts])
 
   // WS live updates
   const handleWsMessage = useCallback((msg) => {
     if (msg.type === 'threat_level') setThreatLevel(msg.data)
     if (msg.type === 'alert') setRecentAlerts(p => [msg.data, ...p].slice(0, 8))
     if (msg.type === 'agent_message') setAgentMessages(p => [...p, msg.data].slice(-20))
-    if (msg.type === 'status') setAgents(mergeAgentsWithDefaults(msg.data.agents || []))
-    if (msg.type === 'ml_prediction') {
-      setMlPredictions(p => [msg.data, ...p].slice(0, 6))
-    }
+    if (msg.type === 'status') setAgents(msg.data.agents || [])
   }, [])
   useWebSocket(handleWsMessage)
 
@@ -300,10 +314,15 @@ export default function Dashboard() {
           <p className="font-mono text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
             <Activity className="w-3.5 h-3.5 text-cyan-400" /> Agent Status
           </p>
-          <div className="max-h-[520px] overflow-y-auto pr-1">
-            <div className="grid grid-cols-1 gap-3">
-              {agents.map(a => <AgentCard key={a.name} agent={a} />)}
-            </div>
+          <div className="grid grid-cols-1 gap-3">
+            {agents.length > 0
+              ? agents.map(a => <AgentCard key={a.name} agent={a} />)
+              : [
+                  { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0 },
+                  { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0 },
+                  { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0 },
+                ].map(a => <AgentCard key={a.name} agent={a} />)
+            }
           </div>
         </div>
 
@@ -324,7 +343,19 @@ export default function Dashboard() {
               <div key={a.id || i} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-800/20 transition-colors">
                 <SeverityBadge level={a.severity} />
                 <div className="flex-1 min-w-0">
-                  <p className="font-mono text-xs text-slate-300 truncate">{a.event}</p>
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                    <p className="font-mono text-xs text-slate-300 truncate">{a.event}</p>
+                    {a.threat_type && (
+                      <span className="shrink-0 font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border"
+                        style={{
+                          color: ATTACK_TYPE_COLORS[a.threat_type] || '#94a3b8',
+                          borderColor: (ATTACK_TYPE_COLORS[a.threat_type] || '#94a3b8') + '35',
+                          background: (ATTACK_TYPE_COLORS[a.threat_type] || '#94a3b8') + '10',
+                        }}>
+                        {ATTACK_LABELS[a.threat_type] || a.threat_type}
+                      </span>
+                    )}
+                  </div>
                   <p className="font-mono text-[11px] text-slate-600">
                     {a.source_ip} · <span className="text-slate-500">{a.agent}</span>
                   </p>
@@ -338,32 +369,6 @@ export default function Dashboard() {
 
       {/* Agent Communication Feed */}
       <AgentCommunicationFeed messages={agentMessages} maxHeight={280} />
-
-      <div className="cyber-card overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800">
-          <Zap className="w-4 h-4 text-cyan-400" />
-          <span className="font-mono text-sm font-semibold text-slate-300">ML Live Predictions</span>
-        </div>
-        <div className="divide-y divide-slate-800/50 max-h-60 overflow-y-auto">
-          {mlPredictions.length === 0 ? (
-            <div className="py-8 text-center">
-              <p className="font-mono text-xs text-slate-600">Waiting for ml_prediction websocket events</p>
-            </div>
-          ) : mlPredictions.map((m, i) => (
-            <div key={i} className="px-4 py-3 flex items-center gap-3">
-              <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${m?.result?.anomaly ? 'text-rose-300 border-rose-500/30 bg-rose-500/10' : 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'}`}>
-                {String(m?.result?.prediction || 'unknown').toUpperCase()}
-              </span>
-              <span className="font-mono text-xs text-slate-400 truncate">
-                {m?.event || 'event'} · {m?.source_ip || 'unknown ip'}
-              </span>
-              <span className="ml-auto font-mono text-xs text-slate-500">
-                {Math.round((m?.result?.score || 0) * 100)}%
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Shield, Lock, User, Eye, EyeOff, AlertCircle, Loader } from 'lucide-react'
+import { Shield, Lock, User, Eye, EyeOff, AlertCircle, Loader, Skull } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
 export default function Login() {
@@ -56,15 +56,6 @@ export default function Login() {
 
         {/* Card */}
         <div className="cyber-card gradient-border p-8">
-          {/* Demo hint */}
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-cyan-500/5 border border-cyan-500/15 mb-6">
-            <AlertCircle className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-            <div className="text-xs font-mono text-slate-400">
-              <p className="text-cyan-400 font-semibold mb-1">DEMO CREDENTIALS</p>
-              <p>Username: <span className="text-white">admin</span> / Password: <span className="text-white">cyber2026</span></p>
-            </div>
-          </div>
-
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Username */}
             <div>
@@ -140,6 +131,15 @@ export default function Login() {
         <p className="text-center text-xs font-mono text-slate-700 mt-6">
           CLASSIFIED // SOC INTERNAL SYSTEM // AUTHORIZED PERSONNEL ONLY
         </p>
+        <div className="text-center mt-3">
+          <a
+            href="/hacker/login"
+            className="inline-flex items-center gap-1.5 text-[11px] font-mono text-slate-800 hover:text-rose-800 transition-colors"
+          >
+            <Skull className="w-3 h-3" />
+            Hacker Console
+          </a>
+        </div>
       </div>
     </div>
   )

@@ -4,7 +4,6 @@ FastAPI Backend - Main Application Entry Point
 """
 
 import asyncio
-import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,8 +16,8 @@ from routes.agents import router as agents_router
 from routes.responses import router as responses_router
 from routes.simulator import router as simulator_router
 from routes.data import router as data_router
-from routes.ml import router as ml_router
 from routes.auth import router as auth_router
+from routes.labs import router as labs_router
 from websocket.manager import websocket_router, manager as ws_manager
 from agents.orchestrator import AgentOrchestrator
 
@@ -32,13 +31,7 @@ async def lifespan(app: FastAPI):
     orchestrator.attach_ws_manager(ws_manager)
     app.state.orchestrator = orchestrator
     await orchestrator.initialize()
-    asyncio.create_task(orchestrator.run_core_services())
-    auto_monitoring = os.getenv("AUTO_MONITORING", "false").lower() == "true"
-    if auto_monitoring:
-        asyncio.create_task(orchestrator.run_continuous_monitoring())
-        print("[OK] Auto monitoring enabled")
-    else:
-        print("[OK] Auto monitoring disabled (no continuous data generation)")
+    asyncio.create_task(orchestrator.run_continuous_monitoring())
     print("[OK] AI Cyber Defense System initialized - all agents online")
     yield
     # Shutdown
@@ -69,7 +62,7 @@ app.include_router(agents_router, prefix="/agents", tags=["Agents"])
 app.include_router(responses_router, prefix="/responses", tags=["Responses"])
 app.include_router(simulator_router, prefix="/simulate-attack", tags=["Simulator"])
 app.include_router(data_router, prefix="/data", tags=["Data"])
-app.include_router(ml_router, prefix="/ml", tags=["ML"])
+app.include_router(labs_router, prefix="/labs", tags=["Labs"])
 app.include_router(websocket_router, tags=["WebSocket"])
 
 

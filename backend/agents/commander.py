@@ -7,7 +7,6 @@ Implements Explainable AI (XAI) reasoning paths.
 
 from __future__ import annotations
 import asyncio
-import os
 import random
 import uuid
 from datetime import datetime
@@ -16,15 +15,7 @@ from typing import Any, Dict, List, Optional
 from models.schemas import (
     AgentName, SeverityLevel, AttackType, ResponseStatus, LogEventType,
 )
-from database.repository import (
-    save_response,
-    save_log,
-    save_agent_message,
-    update_incident_alerts_status,
-    mark_attacks_mitigated,
-    fetch_one,
-    resolve_monitoring_responses_for_alert,
-)
+from database.repository import save_response, save_log, save_agent_message
 
 
 class CommanderAgent:
@@ -42,17 +33,6 @@ class CommanderAgent:
         "Initiate mitigation actions",
         "Generate XAI reasoning paths",
     ]
-    MIN_RESOLUTION_SECONDS = 30
-    MONITORING_AUTO_RESOLVE_SECONDS = max(
-        int(os.getenv("MONITORING_AUTO_RESOLVE_SECONDS", "30")),
-        MIN_RESOLUTION_SECONDS,
-    )
-    CONFIDENCE_BASELINE = float(os.getenv("COMMANDER_CONFIDENCE_BASELINE", "0.65"))
-    CONFIDENCE_BONUS_DETECTIVE = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_DETECTIVE", "0.18"))
-    CONFIDENCE_BONUS_INTEL_FACTOR = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_INTEL_FACTOR", "0.14"))
-    CONFIDENCE_BONUS_ANOMALY = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_ANOMALY", "0.10"))
-    CONFIDENCE_BONUS_SEVERITY = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_SEVERITY", "0.08"))
-    CONFIDENCE_PENALTY_NO_CORROBORATION = float(os.getenv("COMMANDER_CONFIDENCE_PENALTY_NO_CORROBORATION", "0.04"))
 
     def __init__(self):
         self.status = "online"
@@ -62,10 +42,6 @@ class CommanderAgent:
         self.confidence_scores: List[float] = []
         self._message_bus = None
         self._detective: Any = None   # injected
-        self._threat_intelligence: Any = None
-        self._anomaly_detection: Any = None
-        self._response_automation: Any = None
-        self._forensics: Any = None
         self.start_time = datetime.utcnow()
         self._blocked_ips: set = set()
         self._ws_manager: Any = None  # injected for live push
@@ -75,18 +51,6 @@ class CommanderAgent:
 
     def attach_detective(self, detective):
         self._detective = detective
-
-    def attach_threat_intelligence(self, threat_intelligence):
-        self._threat_intelligence = threat_intelligence
-
-    def attach_anomaly_detection(self, anomaly_detection):
-        self._anomaly_detection = anomaly_detection
-
-    def attach_response_automation(self, response_automation):
-        self._response_automation = response_automation
-
-    def attach_forensics(self, forensics):
-        self._forensics = forensics
 
     def attach_ws_manager(self, ws_manager):
         self._ws_manager = ws_manager
@@ -104,14 +68,6 @@ class CommanderAgent:
         ip = alert.get("source_ip") or alert.get("ip", "unknown")
         severity = SeverityLevel(alert.get("severity", "medium"))
         threat_type = alert.get("threat_type", alert.get("event", "unknown"))
-        related_alert_id = alert.get("id")
-
-        if related_alert_id:
-            await self._set_alert_lifecycle(
-                related_alert_id,
-                "investigating",
-                {"phase": "analysis", "updated_by": self.NAME.value, "target": ip},
-            )
 
         # Step 1 — request Detective verification
         verification = await self._request_detective_verification(ip)
@@ -124,19 +80,16 @@ class CommanderAgent:
             failed = payload.get("failed_logins", 0)
             detective_detail = f"{failed} failed login attempts confirmed by Detective" if detective_confirms else "No suspicious login activity found"
 
-        details = alert.get("details", {}) or {}
-        intel_result = details.get("threat_intelligence") or None
-        anomaly_result = details.get("anomaly_detection") or None
-
         # Step 2 — build XAI reasoning
         reasoning, confidence = self._build_reasoning(
-            alert, verification, detective_confirms, intel_result, anomaly_result
+            alert, verification, detective_confirms
         )
 
         # Step 3 — decide action
         action, response_status = self._decide_action(severity, confidence, ip, threat_type)
 
         # Step 4 — persist response with XAI
+        recommendations = self._generate_recommendations(threat_type, severity, action)
         response = {
             "id": str(uuid.uuid4()),
             "timestamp": datetime.utcnow().isoformat(),
@@ -147,27 +100,10 @@ class CommanderAgent:
             "reasoning": reasoning,
             "status": response_status.value,
             "related_alert_id": alert.get("id"),
-            "signals": self._build_signals(alert, detective_confirms, detective_detail, intel_result, anomaly_result),
+            "signals": self._build_signals(alert, detective_confirms, detective_detail),
+            "recommendations": recommendations,
         }
-
-        execution_status = "not_executed"
-        if self._response_automation:
-            await self.broadcast_command(AgentName.RESPONSE_AUTOMATION, "execute_response", {
-                "action": action,
-                "target": ip,
-                "status": response_status.value,
-            })
-            execution = await self._response_automation.execute_action(response)
-            execution_status = execution.get("execution_status", "not_executed")
-            response["signals"].append(f"[Response Automation] Execution status: {execution_status}")
-
-        if self._forensics:
-            await self.broadcast_command(AgentName.FORENSICS, "build_incident_report", {"target": ip})
-            report = await self._forensics.create_incident_report(alert, response, intel_result, anomaly_result)
-            response["signals"].append(f"[Forensics] {report.get('summary')}")
-
         await save_response(response)
-
         await self._log_action(action, ip, confidence)
         self._update_stats(action, confidence)
 
@@ -175,135 +111,22 @@ class CommanderAgent:
         if self._ws_manager:
             await self._ws_manager.broadcast_response(response)
 
-        await self._advance_incident_lifecycle(alert, response, execution_status)
-
         self.status = "online"
         return response
-
-    async def _set_alert_lifecycle(self, alert_id: str, status: str, lifecycle: Dict[str, Any]) -> None:
-        result = await update_incident_alerts_status(alert_id, status, lifecycle)
-        updated_alert = result.get("alert")
-        if self._ws_manager and updated_alert:
-            await self._ws_manager.broadcast_alert(updated_alert)
-
-    async def _advance_incident_lifecycle(self, alert: Dict, response: Dict, execution_status: str) -> None:
-        alert_id = alert.get("id")
-        if not alert_id:
-            return
-
-        target = response.get("target", "unknown")
-        response_status = str(response.get("status", "")).lower()
-
-        if response_status == ResponseStatus.MONITORING.value:
-            await self._set_alert_lifecycle(
-                alert_id,
-                "investigating",
-                {
-                    "phase": "monitoring",
-                    "updated_by": self.NAME.value,
-                    "reason": "Containment confidence not high enough for immediate block",
-                    "target": target,
-                    "auto_resolve_seconds": self.MONITORING_AUTO_RESOLVE_SECONDS,
-                },
-            )
-            return
-
-        if response_status == ResponseStatus.BLOCKED.value and execution_status in ("executed", "already_enforced"):
-            mitigated_count = await mark_attacks_mitigated(
-                target,
-                {
-                    "resolved_by": self.NAME.value,
-                    "execution_status": execution_status,
-                },
-            )
-
-            await self._set_alert_lifecycle(
-                alert_id,
-                "blocked",
-                {
-                    "phase": "containment",
-                    "updated_by": self.NAME.value,
-                    "execution_status": execution_status,
-                    "target": target,
-                    "mitigated_attacks": mitigated_count,
-                    "auto_unblock_seconds": max(
-                        int(os.getenv("BLOCK_AUTO_UNBLOCK_SECONDS", "60")),
-                        self.MIN_RESOLUTION_SECONDS,
-                    ),
-                },
-            )
-            return
-
-    async def _auto_resolve_monitoring_alert(self, alert_id: str, target: str, delay_seconds: int) -> None:
-        await asyncio.sleep(delay_seconds)
-
-        latest_alert = await fetch_one("alerts", {"id": alert_id})
-        if not latest_alert:
-            return
-
-        latest_status = str(latest_alert.get("status", "")).lower()
-        if latest_status in ("resolved", "blocked"):
-            return
-
-        updated_count = await resolve_monitoring_responses_for_alert(
-            alert_id,
-            {
-                "updated_by": self.NAME.value,
-                "reason": "Monitoring auto-resolve timer elapsed",
-            },
-        )
-
-        resolution_response = {
-            "id": str(uuid.uuid4()),
-            "timestamp": datetime.utcnow().isoformat(),
-            "action": f"Auto-resolve monitored incident for IP {target}",
-            "target": target,
-            "agent": self.NAME.value,
-            "confidence": 0.6,
-            "reasoning": f"No escalation during {delay_seconds}s monitoring window. Incident auto-resolved.",
-            "status": ResponseStatus.RESOLVED.value,
-            "related_alert_id": alert_id,
-            "signals": [
-                f"[Commander] Monitoring timer elapsed ({delay_seconds}s)",
-                f"[Commander] Converted monitoring responses to resolved: {updated_count}",
-                "[Commander] No further escalation observed",
-                "[Commander] Incident auto-resolved from monitoring",
-            ],
-        }
-        await save_response(resolution_response)
-        if self._ws_manager:
-            await self._ws_manager.broadcast_response(resolution_response)
-
-        await self._set_alert_lifecycle(
-            alert_id,
-            "resolved",
-            {
-                "phase": "resolved",
-                "updated_by": self.NAME.value,
-                "resolved_at": datetime.utcnow().isoformat(),
-                "resolution": "Monitoring window elapsed without escalation",
-                "target": target,
-            },
-        )
 
     # ------------------------------------------------------------------
     # Explainable AI
     # ------------------------------------------------------------------
 
     def _build_reasoning(
-        self,
-        alert: Dict,
-        verification: Optional[Dict],
-        detective_confirms: bool,
-        intel_result: Optional[Dict],
-        anomaly_result: Optional[Dict],
+        self, alert: Dict, verification: Optional[Dict], detective_confirms: bool
     ) -> tuple[str, float]:
         """
         Construct a human-readable reasoning chain and confidence score.
         This is the XAI component.
         """
         parts: List[str] = []
-        confidence = max(float(alert.get("confidence", 0.5)), self.CONFIDENCE_BASELINE)
+        confidence = alert.get("confidence", 0.5)
 
         # Sentry signal
         sentry_event = alert.get("event", "Unknown event")
@@ -314,52 +137,108 @@ class CommanderAgent:
             payload = (verification or {}).get("payload", {})
             failed = payload.get("failed_logins", 0)
             parts.append(f"Cross-correlated with {failed} failed login attempts confirmed by Detective Agent")
-            confidence = min(0.99, confidence + self.CONFIDENCE_BONUS_DETECTIVE)
+            confidence = min(0.99, confidence + 0.15)
         else:
             parts.append("Detective Agent found no corroborating login anomalies")
-            confidence = max(0.30, confidence - self.CONFIDENCE_PENALTY_NO_CORROBORATION)
-
-        if intel_result and intel_result.get("matched"):
-            parts.append(f"Threat Intelligence matched source to {intel_result.get('label')}")
-            confidence = min(
-                0.99,
-                confidence + min(0.16, float(intel_result.get("confidence", 0.0)) * self.CONFIDENCE_BONUS_INTEL_FACTOR),
-            )
-
-        if anomaly_result and anomaly_result.get("prediction") not in (None, "unavailable", "error"):
-            parts.append(
-                f"Anomaly Detection scored event as {str(anomaly_result.get('prediction')).upper()} at {round(float(anomaly_result.get('score', 0.0)), 2)}"
-            )
-            if anomaly_result.get("anomaly"):
-                confidence = min(0.99, confidence + self.CONFIDENCE_BONUS_ANOMALY)
+            confidence = max(0.30, confidence - 0.10)
 
         # Severity uplift
         sev = alert.get("severity", "medium")
         if sev in ("high", "critical"):
             parts.append(f"Severity classified as {sev.upper()} — immediate response warranted")
-            confidence = min(0.99, confidence + self.CONFIDENCE_BONUS_SEVERITY)
+            confidence = min(0.99, confidence + 0.05)
 
         return " → ".join(parts) + ".", round(confidence, 3)
 
-    def _build_signals(
-        self,
-        alert: Dict,
-        detective_confirms: bool,
-        detective_detail: str,
-        intel_result: Optional[Dict],
-        anomaly_result: Optional[Dict],
-    ) -> List[str]:
+    def _build_signals(self, alert: Dict, detective_confirms: bool, detective_detail: str) -> List[str]:
         signals = [f"[Sentry] {alert.get('event', 'Anomaly detected')} from {alert.get('source_ip', 'unknown')}"]
         if detective_confirms:
             signals.append(f"[Detective] {detective_detail}")
-        if intel_result and intel_result.get("matched"):
-            signals.append(f"[Threat Intelligence] {intel_result.get('label')} ({intel_result.get('source')})")
-        if anomaly_result and anomaly_result.get("prediction") not in (None, "unavailable", "error"):
-            signals.append(
-                f"[Anomaly Detection] {str(anomaly_result.get('prediction')).upper()} score={round(float(anomaly_result.get('score', 0.0)), 3)}"
-            )
         signals.append(f"[Commander] Threat severity: {alert.get('severity', 'unknown').upper()}")
         return signals
+
+    def _generate_recommendations(self, threat_type: str, severity: SeverityLevel, action: str) -> List[str]:
+        """Generate actionable recommendations based on threat type and severity."""
+        recs = []
+        if severity in (SeverityLevel.CRITICAL, SeverityLevel.HIGH):
+            recs.append(f"IMMEDIATE: {action}")
+
+        threat_recs = {
+            "brute_force": [
+                "Enable account lockout after 5 failed attempts",
+                "Implement multi-factor authentication (MFA)",
+                "Deploy rate limiting on authentication endpoints",
+                "Review and rotate potentially compromised credentials",
+            ],
+            "port_scan": [
+                "Review and minimize exposed services",
+                "Update firewall ACLs to restrict unnecessary ports",
+                "Enable port scan detection alerts",
+                "Consider honeypot deployment for reconnaissance detection",
+            ],
+            "sql_injection": [
+                "Enable parameterized queries on all database endpoints",
+                "Deploy WAF rules targeting SQL injection patterns",
+                "Audit application input validation routines",
+                "Review database user permissions (principle of least privilege)",
+            ],
+            "xss": [
+                "Implement Content Security Policy (CSP) headers",
+                "Sanitize all user inputs server-side",
+                "Enable HttpOnly and Secure flags on cookies",
+                "Deploy XSS filtering in WAF",
+            ],
+            "ransomware": [
+                "Immediately isolate infected hosts from network",
+                "Initiate backup restoration procedures",
+                "Preserve forensic evidence before remediation",
+                "Notify incident response team and management",
+            ],
+            "ddos": [
+                "Enable upstream DDoS mitigation service",
+                "Implement rate limiting at edge/CDN level",
+                "Scale infrastructure capacity if possible",
+                "Activate geo-blocking for suspicious regions",
+            ],
+            "data_exfiltration": [
+                "Block outbound connections to suspicious destinations",
+                "Enable Data Loss Prevention (DLP) monitoring",
+                "Review user access permissions and recent activity",
+                "Preserve network logs for forensic analysis",
+            ],
+            "mitm": [
+                "Force HSTS on all web endpoints",
+                "Validate SSL/TLS certificate chains",
+                "Enable certificate pinning where possible",
+                "Review ARP tables for anomalies",
+            ],
+            "dns_spoofing": [
+                "Enable DNSSEC on all domains",
+                "Flush DNS caches on affected systems",
+                "Monitor DNS query logs for anomalies",
+                "Consider DNS-over-HTTPS (DoH) deployment",
+            ],
+            "command_control": [
+                "Block identified C2 IP addresses at firewall",
+                "Run full endpoint forensic scan",
+                "Review scheduled tasks and startup items",
+                "Isolate potentially compromised hosts",
+            ],
+            "suspicious_login": [
+                "Force password reset for affected account",
+                "Verify user identity through secondary channel",
+                "Review recent account activity",
+                "Enable location-based access controls",
+            ],
+            "traffic_spike": [
+                "Enable rate limiting on affected services",
+                "Scale infrastructure capacity",
+                "Review traffic patterns for attack indicators",
+                "Prepare DDoS mitigation if pattern escalates",
+            ],
+        }
+        recs.extend(threat_recs.get(threat_type, ["Investigate source and review security logs", "Update firewall rules as needed"]))
+        return recs
 
     def _decide_action(
         self, severity: SeverityLevel, confidence: float, ip: str, threat_type: str
