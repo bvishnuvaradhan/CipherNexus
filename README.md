@@ -7,7 +7,7 @@ A full-stack, production-grade **Security Operations Center (SOC)** dashboard po
 ## 📸 Platform Overview
 
 | Page | Description |
-|---|---|
+| --- | --- |
 | **Dashboard** | Live SOC overview — threat level, attack chart, agent status, alert feed |
 | **Agents** | Detailed agent ops, A2A protocol diagram, live communication feed |
 | **Logs** | Full log table with severity/agent/search filters and live mode |
@@ -19,7 +19,7 @@ A full-stack, production-grade **Security Operations Center (SOC)** dashboard po
 
 ## 🏗️ Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                    React Frontend                        │
 │  Dashboard · Agents · Logs · Alerts · Sim · Responses   │
@@ -47,7 +47,7 @@ A full-stack, production-grade **Security Operations Center (SOC)** dashboard po
 ### The Three Agents
 
 | Agent | Role | Detection |
-|---|---|---|
+| --- | --- | --- |
 | **Sentry** | Network Defense | Traffic spikes, port scans, suspicious IPs |
 | **Detective** | Log Intelligence | Brute force, suspicious logins, data exfiltration |
 | **Commander** | Decision Engine | Cross-agent correlation → XAI response |
@@ -68,7 +68,7 @@ A full-stack, production-grade **Security Operations Center (SOC)** dashboard po
 
 ### Explainable AI (XAI) Example
 
-```
+```text
 Action:     Block IP 192.168.1.21
 Confidence: 0.92
 Signals:
@@ -93,9 +93,9 @@ cd ai-cyber-defense
 docker-compose up --build
 ```
 
-- Frontend: http://localhost:5173
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
+- Frontend: <http://localhost:5173>
+- Backend API: <http://localhost:8000>
+- API Docs: <http://localhost:8000/docs>
 
 ### Option B — Manual
 
@@ -122,7 +122,7 @@ npm run dev
 ### Demo Credentials
 
 | Username | Password | Role |
-|---|---|---|
+| --- | --- | --- |
 | `admin` | `cyber2026` | SOC Admin |
 | `analyst` | `soc2026` | SOC Analyst |
 | `demo` | `demo` | Demo User |
@@ -131,7 +131,7 @@ npm run dev
 
 ## 📁 Project Structure
 
-```
+```text
 ├── docker-compose.yml
 │
 ├── backend/
@@ -206,7 +206,7 @@ npm run dev
 ### REST Endpoints
 
 | Method | Path | Description |
-|---|---|---|
+| --- | --- | --- |
 | POST | `/auth/login` | Authenticate and get token |
 | GET | `/alerts` | List alerts (filter by severity) |
 | GET | `/alerts/threat-level` | Current threat level + score |
@@ -221,14 +221,14 @@ npm run dev
 
 ### WebSocket
 
-```
+```text
 ws://localhost:8000/ws/alerts
 ```
 
 **Message types pushed to clients:**
 
 | Type | Payload |
-|---|---|
+| --- | --- |
 | `alert` | New threat alert |
 | `agent_message` | A2A communication |
 | `response` | Automated response with XAI |
@@ -276,6 +276,7 @@ python ml/train_cicids.py \
 ```
 
 Outputs:
+
 - `training_artifacts/supervised_binary_sgd.joblib`
 - `training_artifacts/unsupervised_iforest.joblib`
 - `training_artifacts/metrics_report.json`
@@ -285,7 +286,7 @@ Outputs:
 ## 🎨 Design System
 
 | Token | Value | Usage |
-|---|---|---|
+| --- | --- | --- |
 | Background | `#020817` (slate-950) | Page background |
 | Card | `#0f172a` (slate-900) | Component cards |
 | Border | `#1e293b` (slate-800) | Card borders |
@@ -301,12 +302,14 @@ Outputs:
 ## ⚙️ Environment Variables
 
 ### Backend
+
 ```env
 MONGO_URL=mongodb+srv://2410030142_db_user:<db_password>@cluster0.8kzwvmp.mongodb.net/?appName=Cluster0
 DB_NAME=cyber_defense
 ```
 
 ### Frontend
+
 ```env
 VITE_API_URL=http://localhost:8000
 VITE_WS_URL=ws://localhost:8000/ws/alerts
