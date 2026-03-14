@@ -6,11 +6,15 @@ and runs the continuous monitoring / message-processing loops.
 
 from __future__ import annotations
 import asyncio
+import uuid
+from datetime import datetime
 from typing import Optional
 
 from agents.sentry import SentryAgent
 from agents.detective import DetectiveAgent
 from agents.commander import CommanderAgent
+from database.repository import save_alert
+from ml.predictor import predict_anomaly
 
 
 class AgentOrchestrator:
@@ -96,6 +100,8 @@ class AgentOrchestrator:
 
         # Commander processes alerts from field agents
         if to_agent == "Commander" and msg_type == "alert":
+            await self._ml_score_live_alert(msg)
+
             # Build a minimal alert dict for Commander
             alert = {
                 "id": msg.get("id"),
@@ -106,6 +112,89 @@ class AgentOrchestrator:
                 "confidence": msg.get("payload", {}).get("confidence", 0.70),
             }
             await self.commander.process_alert(alert)
+
+    async def _ml_score_live_alert(self, msg: dict):
+        """Run ML scoring on live A2A alert messages and push correlated alerts."""
+        try:
+            flow_features = self._build_flow_features_from_msg(msg)
+            ml_result = predict_anomaly(flow_features)
+
+            if self._ws_manager:
+                await self._ws_manager.broadcast({
+                    "type": "ml_prediction",
+                    "data": {
+                        "source_message_id": msg.get("id"),
+                        "source_agent": msg.get("from_agent"),
+                        "event": msg.get("event"),
+                        "source_ip": msg.get("ip"),
+                        "result": ml_result,
+                    },
+                })
+
+            if ml_result.get("anomaly"):
+                score = float(ml_result.get("score", 0.0))
+                correlated_alert = {
+                    "id": str(uuid.uuid4()),
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "agent": "System",
+                    "event": "ML Correlated Alert",
+                    "threat_type": msg.get("event", "unknown"),
+                    "severity": self._severity_from_score(score),
+                    "source_ip": msg.get("ip"),
+                    "status": "active",
+                    "confidence": round(score, 3),
+                    "details": {
+                        "origin": "orchestrator_message_bus",
+                        "source_agent": msg.get("from_agent"),
+                        "source_message_id": msg.get("id"),
+                        "ml_prediction": ml_result,
+                    },
+                }
+                await save_alert(correlated_alert)
+                if self._ws_manager:
+                    await self._ws_manager.broadcast_alert(correlated_alert)
+        except FileNotFoundError:
+            # Allow platform to run without trained artifacts.
+            return
+        except Exception as e:
+            print(f"[WARN] ML live-scoring failed: {e}")
+
+    def _severity_from_score(self, score: float) -> str:
+        if score >= 0.9:
+            return "critical"
+        if score >= 0.75:
+            return "high"
+        if score >= 0.5:
+            return "medium"
+        return "low"
+
+    def _build_flow_features_from_msg(self, msg: dict) -> dict:
+        payload = msg.get("payload", {}) or {}
+        event = str(msg.get("event", "")).lower()
+
+        port = 80
+        if "port_scan" in event:
+            port = 22
+        elif "brute_force" in event:
+            port = 22
+        elif "data_exfiltration" in event:
+            port = 443
+        elif "suspicious_login" in event:
+            port = 3389
+
+        packet_rate = float(payload.get("packet_rate", 1200))
+        ports_count = float(payload.get("ports_count", 20))
+        failed_attempts = float(payload.get("failed_attempts", 5))
+        megabytes = float(payload.get("megabytes", 30))
+
+        return {
+            "Destination Port": port,
+            "Flow Duration": max(300, int(1000 + failed_attempts * 100)),
+            "Total Fwd Packets": max(5, int(ports_count / 2)),
+            "Total Backward Packets": max(3, int(failed_attempts + 3)),
+            "Flow Bytes/s": max(1000, int(megabytes * 1024)),
+            "Flow Packets/s": max(1.0, round(packet_rate / 100.0, 2)),
+        }
 
     async def _push_live_events(self):
         """
