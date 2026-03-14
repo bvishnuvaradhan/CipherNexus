@@ -68,6 +68,11 @@ class AgentOrchestrator:
         await asyncio.gather(
             self.sentry.monitor_loop(interval=15.0),
             self.detective.monitor_loop(interval=12.0),
+        )
+
+    async def run_core_services(self):
+        """Run core non-synthetic background services required for app behavior."""
+        await asyncio.gather(
             self._process_message_bus(),
             self._push_live_events(),
         )

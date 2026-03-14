@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
     orchestrator.attach_ws_manager(ws_manager)
     app.state.orchestrator = orchestrator
     await orchestrator.initialize()
+    asyncio.create_task(orchestrator.run_core_services())
     auto_monitoring = os.getenv("AUTO_MONITORING", "false").lower() == "true"
     if auto_monitoring:
         asyncio.create_task(orchestrator.run_continuous_monitoring())
