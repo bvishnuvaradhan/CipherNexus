@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  # ── MongoDB ────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: cyber_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: cyber_defense
+
+  # ── FastAPI Backend ────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cyber_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: cyber_defense
+    depends_on:
+      - mongo
+    volumes:
+      - ./backend:/app
+
+  # ── React Frontend ─────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cyber_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000/ws/alerts
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:

@@ -1,0 +1,204 @@
+import { useState, useEffect, useCallback } from 'react'
+import { Activity, Shield, Search, Cpu, Clock, Target, TrendingUp } from 'lucide-react'
+import { agentsAPI, logsAPI } from '../services/api'
+import { useWebSocket } from '../services/websocket'
+import { AgentDot, ConfidenceBar, PageHeader, Spinner, Timestamp } from '../components/ui'
+import { AgentCommunicationFeed } from '../components/AgentFeed'
+
+const AGENT_META = {
+  Sentry: {
+    color: 'cyan',
+    icon: Shield,
+    desc: 'Monitors inbound/outbound network traffic. Detects spikes, port scans, and suspicious IPs in real time.',
+    bg: 'from-cyan-500/5 to-transparent',
+    border: 'border-cyan-500/20',
+    textColor: 'text-cyan-400',
+    ring: 'ring-cyan-500/10',
+  },
+  Detective: {
+    color: 'purple',
+    icon: Search,
+    desc: 'Analyzes authentication logs, detects brute force patterns, flags abnormal login locations and credential attacks.',
+    bg: 'from-purple-500/5 to-transparent',
+    border: 'border-purple-500/20',
+    textColor: 'text-purple-400',
+    ring: 'ring-purple-500/10',
+  },
+  Commander: {
+    color: 'yellow',
+    icon: Cpu,
+    desc: 'Central decision engine. Correlates signals from Sentry and Detective, computes XAI reasoning, and executes responses.',
+    bg: 'from-yellow-500/5 to-transparent',
+    border: 'border-yellow-500/20',
+    textColor: 'text-yellow-400',
+    ring: 'ring-yellow-500/10',
+  },
+}
+
+function AgentDetailCard({ agent }) {
+  const meta = AGENT_META[agent.name] || AGENT_META.Sentry
+  const Icon = meta.icon
+
+  return (
+    <div className={`cyber-card ring-1 ${meta.ring} overflow-hidden`}>
+      {/* Header */}
+      <div className={`bg-gradient-to-r ${meta.bg} px-5 py-4 border-b ${meta.border}`}>
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl bg-slate-900 border ${meta.border} flex items-center justify-center`}>
+              <Icon className={`w-5 h-5 ${meta.textColor}`} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <AgentDot status={agent.status} />
+                <h3 className={`font-display font-bold text-lg ${meta.textColor}`}>{agent.name}</h3>
+              </div>
+              <p className="text-xs font-mono text-slate-500">{agent.role}</p>
+            </div>
+          </div>
+          <span className={`px-2 py-1 rounded border text-[11px] font-mono font-semibold uppercase ${
+            agent.status === 'online' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+            agent.status === 'busy'   ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400' :
+            'bg-slate-700/30 border-slate-700 text-slate-500'
+          }`}>
+            {agent.status}
+          </span>
+        </div>
+        <p className="text-xs font-mono text-slate-500 mt-3 leading-relaxed">{meta.desc}</p>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 gap-4 p-5">
+        <div>
+          <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-1">Threats Detected</p>
+          <p className={`font-display font-bold text-2xl ${meta.textColor}`}>{agent.threat_count || 0}</p>
+        </div>
+        <div>
+          <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-1">Uptime</p>
+          <p className="font-display font-bold text-2xl text-slate-300">
+            {Math.floor((agent.uptime_seconds || 0) / 60)}m
+          </p>
+        </div>
+        <div className="col-span-2">
+          <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-2">Avg Confidence</p>
+          <ConfidenceBar value={agent.confidence_avg} />
+        </div>
+      </div>
+
+      {/* Responsibilities */}
+      <div className="px-5 pb-4">
+        <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-2">Responsibilities</p>
+        <ul className="space-y-1.5">
+          {(agent.responsibilities || []).map((r, i) => (
+            <li key={i} className="flex items-center gap-2 text-xs font-mono text-slate-400">
+              <span className={`w-1 h-1 rounded-full ${meta.textColor} bg-current`} />
+              {r}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Last action */}
+      {agent.last_action && (
+        <div className={`px-5 py-3 border-t ${meta.border} bg-slate-950/50`}>
+          <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-1">Last Action</p>
+          <p className="text-xs font-mono text-slate-400 truncate">{agent.last_action}</p>
+          {agent.last_action_time && (
+            <div className="mt-1">
+              <Timestamp value={agent.last_action_time} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── A2A Protocol Diagram ──────────────────────────────────────────────
+function A2AProtocolDiagram() {
+  return (
+    <div className="cyber-card p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <Activity className="w-4 h-4 text-cyan-400" />
+        <span className="font-mono text-sm font-semibold text-slate-300">A2A Communication Protocol</span>
+      </div>
+      <div className="relative">
+        {/* Flow */}
+        <div className="flex flex-col gap-3">
+          {[
+            { from: 'Sentry', arrow: '→', to: 'Commander', msg: 'traffic_spike detected from 192.168.1.x', color: 'text-cyan-400' },
+            { from: 'Commander', arrow: '→', to: 'Detective', msg: 'verify_ip: check login logs for 192.168.1.x', color: 'text-yellow-400' },
+            { from: 'Detective', arrow: '→', to: 'Commander', msg: '5 failed root logins confirmed (confidence: 0.87)', color: 'text-purple-400' },
+            { from: 'Commander', arrow: '→', to: 'System', msg: 'Block IP — confidence: 0.92 — XAI reasoning generated', color: 'text-emerald-400' },
+          ].map((step, i) => (
+            <div key={i} className="flex items-center gap-2 font-mono text-xs p-2.5 rounded-lg bg-slate-950/60 border border-slate-800/50">
+              <span className="text-[10px] text-slate-700 w-4 shrink-0">{i + 1}.</span>
+              <span className={`font-semibold ${step.color} shrink-0`}>[{step.from}]</span>
+              <span className="text-slate-700 shrink-0">{step.arrow}</span>
+              <span className="text-slate-500 shrink-0">[{step.to}]</span>
+              <span className="text-slate-600 truncate ml-1">{step.msg}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function Agents() {
+  const [agents, setAgents] = useState([])
+  const [messages, setMessages] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    try {
+      const [ag, msgs] = await Promise.allSettled([
+        agentsAPI.list(),
+        logsAPI.agentMessages(30),
+      ])
+      if (ag.status === 'fulfilled') setAgents(ag.value.data.agents || [])
+      if (msgs.status === 'fulfilled') setMessages(msgs.value.data.messages || [])
+    } finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+  useEffect(() => { const id = setInterval(load, 10000); return () => clearInterval(id) }, [load])
+
+  const handleWs = useCallback((msg) => {
+    if (msg.type === 'status') setAgents(msg.data.agents || [])
+    if (msg.type === 'agent_message') setMessages(p => [...p, msg.data].slice(-30))
+  }, [])
+  useWebSocket(handleWs)
+
+  const defaultAgents = [
+    { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor network traffic','Detect traffic spikes','Identify port scans','Flag suspicious IPs'], uptime_seconds: 0 },
+    { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Analyze login attempts','Detect brute force attacks','Flag abnormal login locations','Analyze system logs'], uptime_seconds: 0 },
+    { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Correlate signals from Sentry & Detective','Determine threat severity','Initiate mitigation actions','Generate XAI reasoning paths'], uptime_seconds: 0 },
+  ]
+
+  const displayAgents = agents.length > 0 ? agents : defaultAgents
+
+  return (
+    <div className="p-4 lg:p-6 space-y-6 animate-fade-in">
+      <PageHeader
+        title="Agent Operations"
+        subtitle="Multi-agent AI architecture — real-time monitoring & coordination"
+        icon={Activity}
+      />
+
+      {loading ? (
+        <div className="flex justify-center py-12"><Spinner size="lg" /></div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {displayAgents.map(a => <AgentDetailCard key={a.name} agent={a} />)}
+          </div>
+
+          <A2AProtocolDiagram />
+
+          <AgentCommunicationFeed messages={messages} maxHeight={360} />
+        </>
+      )}
+    </div>
+  )
+}
