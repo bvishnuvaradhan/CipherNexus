@@ -58,7 +58,7 @@ const ATTACKS = [
     icon: Wifi,
     color: '#06b6d4',
     category: 'RECON',
-    severity: 'MEDIUM',
+    severity: 'LOW',
     desc: 'Probes target ports sequentially or randomly to map open services, identify OS fingerprints, and find attack vectors.',
     detects: 'Sentry Agent — network anomaly detection',
     params: [
@@ -91,7 +91,7 @@ const ATTACKS = [
     icon: Globe,
     color: '#a855f7',
     category: 'AUTH',
-    severity: 'MEDIUM',
+    severity: 'LOW',
     desc: 'Attempts authentication from a suspicious geographic location (TOR exit node, nation-state IP) to test geo-based detection.',
     detects: 'Detective Agent — login location analysis',
     params: [
@@ -411,6 +411,17 @@ const CATEGORY_COLORS = {
   MALWARE: '#dc2626',
 }
 
+const SEVERITY_OPTIONS = ['ALL', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+
+function severityColor(severity) {
+  const level = String(severity || '').toUpperCase()
+  if (level === 'CRITICAL') return '#ef4444'
+  if (level === 'HIGH') return '#f97316'
+  if (level === 'MEDIUM') return '#eab308'
+  if (level === 'LOW') return '#10b981'
+  return '#94a3b8'
+}
+
 function buildDefaultParams(attack) {
   return Object.fromEntries((attack.params || []).map((param) => [param.key, param.default ?? '']))
 }
@@ -579,7 +590,7 @@ function AttackResult({ result, attackLabel }) {
   if (!result) return null
   const alert = result.agent_result?.alert
   const severity = alert?.severity?.toUpperCase() || 'DETECTED'
-  const sevColor = severity === 'CRITICAL' ? '#ef4444' : severity === 'HIGH' ? '#f97316' : '#eab308'
+  const sevColor = severityColor(severity)
 
   return (
     <div className="rounded-xl border p-5 animate-fade-in"
@@ -780,6 +791,7 @@ export default function HackerConsole() {
   const [lastResult, setLastResult] = useState(null)
   const [lastAttackLabel, setLastAttackLabel] = useState('')
   const [filterCat, setFilterCat] = useState('ALL')
+  const [filterSeverity, setFilterSeverity] = useState('ALL')
 
   const addLog = useCallback((type, tag, msg) => {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false })
@@ -930,7 +942,11 @@ export default function HackerConsole() {
   }
 
   const categories = ['ALL', ...new Set(ATTACKS.map(a => a.category))]
-  const filtered = filterCat === 'ALL' ? ATTACKS : ATTACKS.filter(a => a.category === filterCat)
+  const filtered = ATTACKS.filter((attack) => {
+    const byCategory = filterCat === 'ALL' || attack.category === filterCat
+    const bySeverity = filterSeverity === 'ALL' || String(attack.severity || '').toUpperCase() === filterSeverity
+    return byCategory && bySeverity
+  })
 
   return (
     <div className="min-h-screen" style={{ background: '#060305' }}>
@@ -985,7 +1001,7 @@ export default function HackerConsole() {
         </div>
 
         {/* Global controls */}
-        <div className="rounded-xl border p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+        <div className="rounded-xl border p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4"
           style={{ background: 'rgba(10,5,5,0.8)', borderColor: 'rgba(239,68,68,0.12)' }}
         >
           {/* Intensity */}
@@ -1045,6 +1061,19 @@ export default function HackerConsole() {
               style={{ background: '#060305', border: '1px solid rgba(239,68,68,0.15)', color: '#94a3b8' }}
             >
               {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          {/* Severity filter */}
+          <div>
+            <label className="block font-mono text-[10px] uppercase mb-2" style={{ color: '#4a1515' }}>Filter Severity</label>
+            <select
+              value={filterSeverity}
+              onChange={e => setFilterSeverity(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg font-mono text-xs outline-none"
+              style={{ background: '#060305', border: '1px solid rgba(239,68,68,0.15)', color: '#94a3b8' }}
+            >
+              {SEVERITY_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
         </div>
