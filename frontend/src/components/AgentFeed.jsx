@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react'
 import { MessageSquare, ArrowRight } from 'lucide-react'
 import { Timestamp } from './ui'
 
@@ -60,11 +59,7 @@ export function AgentFeedItem({ msg }) {
 }
 
 export function AgentCommunicationFeed({ messages = [], maxHeight = 320, title = 'Agent Communication Feed' }) {
-  const bottomRef = useRef(null)
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  const displayMessages = [...messages].reverse()
 
   return (
     <div className="cyber-card overflow-hidden">
@@ -80,10 +75,9 @@ export function AgentCommunicationFeed({ messages = [], maxHeight = 320, title =
           </div>
         ) : (
           <>
-            {messages.map((msg, i) => (
+            {displayMessages.map((msg, i) => (
               <AgentFeedItem key={msg.id || i} msg={msg} />
             ))}
-            <div ref={bottomRef} />
           </>
         )}
       </div>
