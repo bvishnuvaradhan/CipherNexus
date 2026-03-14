@@ -4,6 +4,7 @@ FastAPI Backend - Main Application Entry Point
 """
 
 import asyncio
+import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +32,12 @@ async def lifespan(app: FastAPI):
     orchestrator.attach_ws_manager(ws_manager)
     app.state.orchestrator = orchestrator
     await orchestrator.initialize()
-    asyncio.create_task(orchestrator.run_continuous_monitoring())
+    auto_monitoring = os.getenv("AUTO_MONITORING", "false").lower() == "true"
+    if auto_monitoring:
+        asyncio.create_task(orchestrator.run_continuous_monitoring())
+        print("[OK] Auto monitoring enabled")
+    else:
+        print("[OK] Auto monitoring disabled (no continuous data generation)")
     print("[OK] AI Cyber Defense System initialized - all agents online")
     yield
     # Shutdown

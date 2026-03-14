@@ -341,7 +341,10 @@ curl -X POST http://localhost:8000/ml/predict \
 ```env
 MONGO_URL=mongodb+srv://2410030142_db_user:<db_password>@cluster0.8kzwvmp.mongodb.net/?appName=Cluster0
 DB_NAME=cyber_defense
+AUTO_MONITORING=false
 ```
+
+Set `AUTO_MONITORING=false` to stop continuous synthetic agent-generated data. Use simulator/manual endpoints to generate events only when needed.
 
 ### Frontend
 
