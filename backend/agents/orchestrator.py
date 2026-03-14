@@ -6,8 +6,9 @@ and runs the continuous monitoring / message-processing loops.
 
 from __future__ import annotations
 import asyncio
+import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from agents.sentry import SentryAgent
@@ -40,6 +41,7 @@ class AgentOrchestrator:
         self._bus: asyncio.Queue = asyncio.Queue()
         self._ws_manager: Optional[object] = None
         self._running = False
+        self._minimum_resolution_seconds = 30
 
     async def initialize(self):
         """Wire up agents and inject shared dependencies."""
@@ -92,7 +94,217 @@ class AgentOrchestrator:
         await asyncio.gather(
             self._process_message_bus(),
             self._push_live_events(),
+            self._resolve_monitoring_by_time(),
+            self._unblock_blocked_by_time(),
         )
+
+    async def _unblock_blocked_by_time(self):
+        """Auto-unblock blocked incidents after TTL and mark them resolved."""
+        from database.repository import (
+            count_documents,
+            get_due_blocked_responses,
+            resolve_blocked_responses_for_alert,
+            save_response,
+            update_incident_alerts_status,
+            fetch_one,
+            has_recent_incident_activity,
+        )
+
+        while True:
+            await asyncio.sleep(5)
+            try:
+                timeout_seconds = max(int(os.getenv("BLOCK_AUTO_UNBLOCK_SECONDS", "60")), self._minimum_resolution_seconds)
+            except Exception:
+                timeout_seconds = 60
+
+            if timeout_seconds <= 0:
+                continue
+
+            cutoff_iso = (datetime.utcnow() - timedelta(seconds=timeout_seconds)).isoformat()
+
+            try:
+                due = await get_due_blocked_responses(cutoff_iso=cutoff_iso, limit=100)
+                processed_alerts: set[str] = set()
+                for row in due:
+                    alert_id = row.get("related_alert_id")
+                    target = row.get("target", "unknown")
+
+                    if not alert_id or alert_id in processed_alerts:
+                        continue
+                    processed_alerts.add(alert_id)
+
+                    already_resolved = await count_documents(
+                        "responses",
+                        {"related_alert_id": alert_id, "status": "resolved"},
+                    )
+                    if already_resolved > 0:
+                        await resolve_blocked_responses_for_alert(
+                            alert_id,
+                            {
+                                "updated_by": "SystemUnblockResolver",
+                                "reason": "Resolved response already exists for alert",
+                            },
+                        )
+                        continue
+
+                    if await has_recent_incident_activity(alert_id, cutoff_iso):
+                        continue
+
+                    converted = await resolve_blocked_responses_for_alert(
+                        alert_id,
+                        {
+                            "updated_by": "SystemUnblockResolver",
+                            "reason": f"Block TTL reached ({timeout_seconds}s)",
+                        },
+                    )
+
+                    release_result = await self.response_automation.release_target(
+                        target,
+                        reason=f"block_ttl_elapsed_{timeout_seconds}s",
+                    )
+
+                    resolution_response = {
+                        "id": str(uuid.uuid4()),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "action": f"Auto-unblock IP {target}",
+                        "target": target,
+                        "agent": "Commander",
+                        "confidence": 0.7,
+                        "reasoning": f"Block duration reached {timeout_seconds}s TTL. Target unblocked and incident resolved.",
+                        "status": "resolved",
+                        "related_alert_id": alert_id,
+                        "signals": [
+                            f"[SystemUnblockResolver] Block TTL elapsed ({timeout_seconds}s)",
+                            f"[SystemUnblockResolver] Converted blocked responses: {converted}",
+                            f"[Response Automation] released={release_result.get('released', False)}",
+                            "[SystemUnblockResolver] Incident auto-resolved after unblock",
+                        ],
+                    }
+                    await save_response(resolution_response)
+
+                    updated_result = await update_incident_alerts_status(
+                        alert_id,
+                        "resolved",
+                        {
+                            "phase": "resolved",
+                            "updated_by": "SystemUnblockResolver",
+                            "resolved_at": datetime.utcnow().isoformat(),
+                            "resolution": "Block TTL elapsed; target auto-unblocked",
+                            "target": target,
+                        },
+                    )
+                    updated_alert = updated_result.get("alert")
+
+                    if self._ws_manager:
+                        await self._ws_manager.broadcast_response(resolution_response)
+                        if updated_alert:
+                            await self._ws_manager.broadcast_alert(updated_alert)
+                        else:
+                            fallback_alert = await fetch_one("alerts", {"id": alert_id})
+                            if fallback_alert:
+                                await self._ws_manager.broadcast_alert(fallback_alert)
+            except Exception as e:
+                print(f"[WARN] Block TTL resolver error: {e}")
+
+    async def _resolve_monitoring_by_time(self):
+        """Resolve monitoring incidents when their timeout window elapses."""
+        from database.repository import (
+            count_documents,
+            get_due_monitoring_responses,
+            resolve_monitoring_responses_for_alert,
+            save_response,
+            update_incident_alerts_status,
+            fetch_one,
+            has_recent_incident_activity,
+        )
+
+        while True:
+            await asyncio.sleep(5)
+            try:
+                timeout_seconds = max(int(os.getenv("MONITORING_AUTO_RESOLVE_SECONDS", "30")), self._minimum_resolution_seconds)
+            except Exception:
+                timeout_seconds = 30
+
+            if timeout_seconds <= 0:
+                continue
+
+            cutoff_iso = (datetime.utcnow() - timedelta(seconds=timeout_seconds)).isoformat()
+
+            try:
+                due = await get_due_monitoring_responses(cutoff_iso=cutoff_iso, limit=100)
+                for row in due:
+                    alert_id = row.get("related_alert_id")
+                    target = row.get("target", "unknown")
+
+                    if not alert_id:
+                        continue
+
+                    already_resolved = await count_documents(
+                        "responses",
+                        {"related_alert_id": alert_id, "status": "resolved"},
+                    )
+                    if already_resolved > 0:
+                        await resolve_monitoring_responses_for_alert(
+                            alert_id,
+                            {
+                                "updated_by": "SystemTimeoutResolver",
+                                "reason": "Resolved response already exists for alert",
+                            },
+                        )
+                        continue
+
+                    if await has_recent_incident_activity(alert_id, cutoff_iso):
+                        continue
+
+                    converted = await resolve_monitoring_responses_for_alert(
+                        alert_id,
+                        {
+                            "updated_by": "SystemTimeoutResolver",
+                            "reason": f"Monitoring timeout reached ({timeout_seconds}s)",
+                        },
+                    )
+
+                    resolution_response = {
+                        "id": str(uuid.uuid4()),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "action": f"Auto-resolve monitored incident for IP {target}",
+                        "target": target,
+                        "agent": "Commander",
+                        "confidence": 0.6,
+                        "reasoning": f"No escalation during {timeout_seconds}s monitoring window. Incident auto-resolved.",
+                        "status": "resolved",
+                        "related_alert_id": alert_id,
+                        "signals": [
+                            f"[SystemTimeoutResolver] Monitoring timer elapsed ({timeout_seconds}s)",
+                            f"[SystemTimeoutResolver] Converted monitoring responses: {converted}",
+                            "[SystemTimeoutResolver] Incident auto-resolved",
+                        ],
+                    }
+                    await save_response(resolution_response)
+
+                    updated_result = await update_incident_alerts_status(
+                        alert_id,
+                        "resolved",
+                        {
+                            "phase": "resolved",
+                            "updated_by": "SystemTimeoutResolver",
+                            "resolved_at": datetime.utcnow().isoformat(),
+                            "resolution": "Monitoring window elapsed without escalation",
+                            "target": target,
+                        },
+                    )
+                    updated_alert = updated_result.get("alert")
+
+                    if self._ws_manager:
+                        await self._ws_manager.broadcast_response(resolution_response)
+                        if updated_alert:
+                            await self._ws_manager.broadcast_alert(updated_alert)
+                        elif alert_id:
+                            fallback_alert = await fetch_one("alerts", {"id": alert_id})
+                            if fallback_alert:
+                                await self._ws_manager.broadcast_alert(fallback_alert)
+            except Exception as e:
+                print(f"[WARN] Monitoring timeout resolver error: {e}")
 
     async def _process_message_bus(self):
         """
@@ -124,15 +336,17 @@ class AgentOrchestrator:
         if to_agent == "Commander" and msg_type == "alert":
             intel_result = self.threat_intelligence.assess_ip(msg.get("ip"))
             anomaly_result = await self._ml_score_live_alert(msg)
+            payload = msg.get("payload", {}) or {}
+            related_alert_id = payload.get("related_alert_id") or payload.get("alert_id") or msg.get("id")
 
             # Build a minimal alert dict for Commander
             alert = {
-                "id": msg.get("id"),
+                "id": related_alert_id,
                 "event": event,
                 "threat_type": event,
                 "severity": msg.get("severity", "medium"),
                 "source_ip": msg.get("ip"),
-                "confidence": msg.get("payload", {}).get("confidence", 0.70),
+                "confidence": payload.get("confidence", 0.70),
                 "details": {
                     "threat_intelligence": intel_result,
                     "anomaly_detection": anomaly_result,
@@ -297,7 +511,11 @@ class AgentOrchestrator:
             if alerts:
                 await self.detective.report_to_commander(
                     "brute_force_detected", ip, SeverityLevel.HIGH,
-                    {"failed_attempts": len(alerts), "simulated": True},
+                    {
+                        "failed_attempts": len(alerts),
+                        "simulated": True,
+                        "related_alert_id": alerts[-1].get("id"),
+                    },
                 )
             return {"triggered": "Detective", "alerts": len(alerts)}
 
@@ -307,7 +525,11 @@ class AgentOrchestrator:
             if alert:
                 await self.sentry.report_to_commander(
                     "port_scan", ip, SeverityLevel(alert["severity"]),
-                    {"ports_count": len(ports), "simulated": True},
+                    {
+                        "ports_count": len(ports),
+                        "simulated": True,
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
             return {"triggered": "Sentry", "alert": alert}
 
@@ -318,7 +540,11 @@ class AgentOrchestrator:
             if alert:
                 await self.detective.report_to_commander(
                     "suspicious_login", ip, SeverityLevel(alert["severity"]),
-                    {"location": location, "simulated": True},
+                    {
+                        "location": location,
+                        "simulated": True,
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
             return {"triggered": "Detective", "alert": alert}
 
@@ -328,7 +554,11 @@ class AgentOrchestrator:
             if alert:
                 await self.detective.report_to_commander(
                     "data_exfiltration", ip, SeverityLevel(alert["severity"]),
-                    {"megabytes": round(size / 1024 / 1024, 1), "simulated": True},
+                    {
+                        "megabytes": round(size / 1024 / 1024, 1),
+                        "simulated": True,
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
             return {"triggered": "Detective", "alert": alert}
 
@@ -338,7 +568,11 @@ class AgentOrchestrator:
             if alert:
                 await self.sentry.report_to_commander(
                     "traffic_spike", ip, SeverityLevel(alert["severity"]),
-                    {"packet_rate": rate, "simulated": True},
+                    {
+                        "packet_rate": rate,
+                        "simulated": True,
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
             return {"triggered": "Sentry", "alert": alert}
 

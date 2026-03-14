@@ -209,7 +209,10 @@ class SentryAgent:
             if alert:
                 await self.report_to_commander(
                     "port_scan", ip, SeverityLevel(alert["severity"]),
-                    {"ports_count": len(ports)},
+                    {
+                        "ports_count": len(ports),
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
         elif roll < 0.25:
             rate = random.randint(1100, 8000)
@@ -217,13 +220,16 @@ class SentryAgent:
             if alert:
                 await self.report_to_commander(
                     "traffic_spike", ip, SeverityLevel(alert["severity"]),
-                    {"packet_rate": rate},
+                    {
+                        "packet_rate": rate,
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
         elif roll < 0.30:
             alert = await self.detect_suspicious_ip(ip, "Threat intelligence match")
             if alert:
                 await self.report_to_commander(
-                    "suspicious_ip", ip, SeverityLevel(alert["severity"]), {}
+                    "suspicious_ip", ip, SeverityLevel(alert["severity"]), {"related_alert_id": alert.get("id")}
                 )
 
         self.status = "online"

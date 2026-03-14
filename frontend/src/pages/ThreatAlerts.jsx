@@ -1,8 +1,48 @@
-import { useState, useEffect, useCallback } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import { AlertTriangle, RefreshCw, Bell } from 'lucide-react'
-import { alertsAPI } from '../services/api'
+import { alertsAPI, logsAPI } from '../services/api'
 import { useWebSocket } from '../services/websocket'
 import { SeverityBadge, StatusBadge, PageHeader, Spinner, EmptyState, Timestamp, StatCard } from '../components/ui'
+
+function normalizeThreat(alert = {}) {
+  return {
+    ...alert,
+    threat_key: `${alert.threat_type || alert.event || 'unknown'}|${alert.source_ip || 'unknown'}|${alert.target || 'na'}`,
+  }
+}
+
+function groupThreats(alerts = []) {
+  const groups = new Map()
+  for (const raw of alerts) {
+    const alert = normalizeThreat(raw)
+    const key = alert.threat_key
+    const existing = groups.get(key)
+    if (!existing) {
+      groups.set(key, {
+        ...alert,
+        occurrences: 1,
+        latest_timestamp: alert.timestamp,
+      })
+      continue
+    }
+
+    existing.occurrences += 1
+    const existingTs = String(existing.latest_timestamp || '')
+    const currentTs = String(alert.timestamp || '')
+    if (currentTs > existingTs) {
+      groups.set(key, {
+        ...existing,
+        ...alert,
+        occurrences: existing.occurrences,
+        latest_timestamp: alert.timestamp,
+      })
+    } else {
+      existing.status = existing.status === 'active' || alert.status === 'active' ? 'active' : existing.status
+      groups.set(key, existing)
+    }
+  }
+  return [...groups.values()].sort((a, b) => String(b.latest_timestamp || '').localeCompare(String(a.latest_timestamp || '')))
+}
 
 export default function ThreatAlerts() {
   const [alerts, setAlerts] = useState([])
@@ -10,6 +50,9 @@ export default function ThreatAlerts() {
   const [loading, setLoading] = useState(true)
   const [severityFilter, setSeverityFilter] = useState('all')
   const [newCount, setNewCount] = useState(0)
+  const [selectedThreat, setSelectedThreat] = useState(null)
+  const [threatLogs, setThreatLogs] = useState([])
+  const [logsLoading, setLogsLoading] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -30,9 +73,37 @@ export default function ThreatAlerts() {
   }, [])
   useWebSocket(handleWs)
 
+  const groupedAlerts = useMemo(() => groupThreats(alerts), [alerts])
+
   const filtered = severityFilter === 'all'
-    ? alerts
-    : alerts.filter(a => a.severity === severityFilter)
+    ? groupedAlerts
+    : groupedAlerts.filter(a => a.severity === severityFilter)
+
+  const loadThreatLogs = useCallback(async (threat) => {
+    setSelectedThreat(threat)
+    if (!threat?.id) {
+      setThreatLogs([])
+      return
+    }
+    setLogsLoading(true)
+    try {
+      const res = await logsAPI.forAlert(threat.id, 200)
+      setThreatLogs(res.data.logs || [])
+    } catch {
+      setThreatLogs([])
+    } finally {
+      setLogsLoading(false)
+    }
+  }, [])
+
+  const toggleThreatLogs = useCallback((threat) => {
+    if (selectedThreat?.threat_key === threat.threat_key) {
+      setSelectedThreat(null)
+      setThreatLogs([])
+      return
+    }
+    loadThreatLogs(threat)
+  }, [loadThreatLogs, selectedThreat])
 
   return (
     <div className="p-4 lg:p-6 space-y-5 animate-fade-in">
@@ -95,48 +166,85 @@ export default function ThreatAlerts() {
                   <th>Agent</th>
                   <th>Status</th>
                   <th>Confidence</th>
-                  <th>Details</th>
+                  <th>Occurrences</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((a, i) => (
-                  <tr key={a.id || i} className="animate-fade-in">
-                    <td><Timestamp value={a.timestamp} /></td>
-                    <td className="text-slate-300 font-semibold">{a.event}</td>
-                    <td>
-                      <span className="font-mono text-cyan-400/80 text-xs">{a.source_ip || '—'}</span>
-                    </td>
-                    <td><SeverityBadge level={a.severity} /></td>
-                    <td>
-                      <span className={`font-mono text-xs font-semibold ${
-                        a.agent === 'Sentry' ? 'text-cyan-400' :
-                        a.agent === 'Detective' ? 'text-purple-400' :
-                        'text-yellow-400'
-                      }`}>{a.agent}</span>
-                    </td>
-                    <td><StatusBadge status={a.status} /></td>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-1 rounded-full bg-slate-800 overflow-hidden">
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${Math.round((a.confidence || 0) * 100)}%`,
-                              background: (a.confidence || 0) >= 0.8 ? '#f43f5e' : '#22d3ee',
-                            }}
-                          />
+                  <Fragment key={a.threat_key || a.id || i}>
+                    <tr
+                      className={`animate-fade-in cursor-pointer ${selectedThreat?.threat_key === a.threat_key ? 'bg-slate-900/60' : ''}`}
+                      onClick={() => toggleThreatLogs(a)}
+                    >
+                      <td><Timestamp value={a.latest_timestamp || a.timestamp} /></td>
+                      <td className="text-slate-300 font-semibold">{a.event}</td>
+                      <td>
+                        <span className="font-mono text-cyan-400/80 text-xs">{a.source_ip || '—'}</span>
+                      </td>
+                      <td><SeverityBadge level={a.severity} /></td>
+                      <td>
+                        <span className={`font-mono text-xs font-semibold ${
+                          a.agent === 'Sentry' ? 'text-cyan-400' :
+                          a.agent === 'Detective' ? 'text-purple-400' :
+                          'text-yellow-400'
+                        }`}>{a.agent}</span>
+                      </td>
+                      <td><StatusBadge status={a.status} /></td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1 rounded-full bg-slate-800 overflow-hidden">
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${Math.round((a.confidence || 0) * 100)}%`,
+                                background: (a.confidence || 0) >= 0.8 ? '#f43f5e' : '#22d3ee',
+                              }}
+                            />
+                          </div>
+                          <span className="text-[11px] font-mono text-slate-400">
+                            {Math.round((a.confidence || 0) * 100)}%
+                          </span>
                         </div>
-                        <span className="text-[11px] font-mono text-slate-400">
-                          {Math.round((a.confidence || 0) * 100)}%
-                        </span>
-                      </div>
-                    </td>
-                    <td className="text-slate-500 max-w-[180px]">
-                      <span className="block truncate text-[11px]" title={JSON.stringify(a.details)}>
-                        {a.details ? Object.entries(a.details).slice(0, 2).map(([k, v]) => `${k}: ${v}`).join(' · ') : '—'}
-                      </span>
-                    </td>
-                  </tr>
+                      </td>
+                      <td className="text-slate-400 font-mono text-xs">
+                        {a.occurrences || 1}
+                      </td>
+                    </tr>
+                    {selectedThreat?.threat_key === a.threat_key && (
+                      <tr className="bg-slate-950/70">
+                        <td colSpan={8} className="px-4 py-4">
+                          <div className="rounded-lg border border-slate-800 bg-slate-950/60 overflow-hidden">
+                            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-3">
+                              <p className="font-mono text-sm font-semibold text-slate-300">Attack Logs</p>
+                              <p className="font-mono text-[11px] text-slate-500 truncate max-w-[60%]">
+                                {a.event} · {a.source_ip || 'unknown ip'}
+                              </p>
+                            </div>
+                            {logsLoading ? (
+                              <div className="flex justify-center py-8"><Spinner /></div>
+                            ) : threatLogs.length === 0 ? (
+                              <div className="py-8 text-center">
+                                <p className="font-mono text-xs text-slate-600">No logs found for the selected threat</p>
+                              </div>
+                            ) : (
+                              <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/60">
+                                {threatLogs.map((log, logIndex) => (
+                                  <div key={log.id || logIndex} className="px-4 py-3">
+                                    <div className="flex items-center gap-3 mb-1">
+                                      <Timestamp value={log.timestamp} />
+                                      <span className="font-mono text-[11px] text-slate-500 uppercase">{log.event_type}</span>
+                                      <span className="font-mono text-[11px] text-slate-600">{log.agent}</span>
+                                    </div>
+                                    <p className="font-mono text-xs text-slate-300">{log.message}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -145,7 +253,7 @@ export default function ThreatAlerts() {
       </div>
 
       <p className="text-[11px] font-mono text-slate-700 text-right">
-        Showing {filtered.length} of {alerts.length} alerts
+        Showing {filtered.length} grouped threats from {alerts.length} alerts
       </p>
     </div>
   )

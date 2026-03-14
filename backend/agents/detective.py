@@ -247,12 +247,16 @@ class DetectiveAgent:
         roll = random.random()
         if roll < 0.20:
             # Simulate multiple failed logins → brute force
+            alert = None
             for _ in range(random.randint(5, 12)):
                 alert = await self.analyze_failed_login(ip, username)
             if alert:
                 await self.report_to_commander(
                     "brute_force_detected", ip, SeverityLevel(alert["severity"]),
-                    {"failed_attempts": alert["details"]["failed_attempts"]},
+                    {
+                        "failed_attempts": alert["details"]["failed_attempts"],
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
         elif roll < 0.30:
             location = random.choice(self.SUSPICIOUS_LOCATIONS)
@@ -260,7 +264,10 @@ class DetectiveAgent:
             if alert:
                 await self.report_to_commander(
                     "suspicious_login", ip, SeverityLevel(alert["severity"]),
-                    {"location": location},
+                    {
+                        "location": location,
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
         elif roll < 0.35:
             size = random.randint(60 * 1024 * 1024, 300 * 1024 * 1024)
@@ -268,7 +275,10 @@ class DetectiveAgent:
             if alert:
                 await self.report_to_commander(
                     "data_exfiltration", ip, SeverityLevel(alert["severity"]),
-                    {"megabytes": round(size / 1024 / 1024, 1)},
+                    {
+                        "megabytes": round(size / 1024 / 1024, 1),
+                        "related_alert_id": alert.get("id"),
+                    },
                 )
         else:
             # Normal login — just log it

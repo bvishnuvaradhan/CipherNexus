@@ -80,6 +80,47 @@ class ResponseAutomationAgent:
         self.status = "online"
         return {"execution_status": execution_status, "target": target, "action": action}
 
+    async def release_target(self, target: str, reason: str = "ttl_expired") -> Dict[str, Any]:
+        """Release a previously blocked target (auto-unblock/manual-unblock)."""
+        self.status = "busy"
+        was_blocked = target in self._executed_targets
+        if was_blocked:
+            self._executed_targets.discard(target)
+
+        self._update_stats(f"Release target {target} [{reason}]", 0.7 if was_blocked else 0.5)
+
+        msg = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.utcnow().isoformat(),
+            "from_agent": self.NAME,
+            "to_agent": "Commander",
+            "event": "target_released",
+            "ip": target,
+            "severity": "resolved",
+            "payload": {
+                "reason": reason,
+                "released": was_blocked,
+            },
+            "message_type": "response",
+        }
+        await save_agent_message(msg)
+        if self._message_bus:
+            await self._message_bus.put(msg)
+
+        await save_log({
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.utcnow().isoformat(),
+            "event_type": LogEventType.AGENT_ACTION.value,
+            "agent": self.NAME,
+            "severity": SeverityLevel.MEDIUM.value,
+            "message": f"Response Automation released target {target} ({reason})",
+            "source_ip": target,
+            "details": {"reason": reason, "released": was_blocked},
+        })
+
+        self.status = "online"
+        return {"released": was_blocked, "target": target, "reason": reason}
+
     def _update_stats(self, action: str, confidence: float):
         self.threat_count += 1
         self.last_action = action

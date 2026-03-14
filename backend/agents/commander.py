@@ -7,6 +7,7 @@ Implements Explainable AI (XAI) reasoning paths.
 
 from __future__ import annotations
 import asyncio
+import os
 import random
 import uuid
 from datetime import datetime
@@ -15,7 +16,15 @@ from typing import Any, Dict, List, Optional
 from models.schemas import (
     AgentName, SeverityLevel, AttackType, ResponseStatus, LogEventType,
 )
-from database.repository import save_response, save_log, save_agent_message
+from database.repository import (
+    save_response,
+    save_log,
+    save_agent_message,
+    update_incident_alerts_status,
+    mark_attacks_mitigated,
+    fetch_one,
+    resolve_monitoring_responses_for_alert,
+)
 
 
 class CommanderAgent:
@@ -33,6 +42,17 @@ class CommanderAgent:
         "Initiate mitigation actions",
         "Generate XAI reasoning paths",
     ]
+    MIN_RESOLUTION_SECONDS = 30
+    MONITORING_AUTO_RESOLVE_SECONDS = max(
+        int(os.getenv("MONITORING_AUTO_RESOLVE_SECONDS", "30")),
+        MIN_RESOLUTION_SECONDS,
+    )
+    CONFIDENCE_BASELINE = float(os.getenv("COMMANDER_CONFIDENCE_BASELINE", "0.65"))
+    CONFIDENCE_BONUS_DETECTIVE = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_DETECTIVE", "0.18"))
+    CONFIDENCE_BONUS_INTEL_FACTOR = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_INTEL_FACTOR", "0.14"))
+    CONFIDENCE_BONUS_ANOMALY = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_ANOMALY", "0.10"))
+    CONFIDENCE_BONUS_SEVERITY = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_SEVERITY", "0.08"))
+    CONFIDENCE_PENALTY_NO_CORROBORATION = float(os.getenv("COMMANDER_CONFIDENCE_PENALTY_NO_CORROBORATION", "0.04"))
 
     def __init__(self):
         self.status = "online"
@@ -84,6 +104,14 @@ class CommanderAgent:
         ip = alert.get("source_ip") or alert.get("ip", "unknown")
         severity = SeverityLevel(alert.get("severity", "medium"))
         threat_type = alert.get("threat_type", alert.get("event", "unknown"))
+        related_alert_id = alert.get("id")
+
+        if related_alert_id:
+            await self._set_alert_lifecycle(
+                related_alert_id,
+                "investigating",
+                {"phase": "analysis", "updated_by": self.NAME.value, "target": ip},
+            )
 
         # Step 1 — request Detective verification
         verification = await self._request_detective_verification(ip)
@@ -122,6 +150,7 @@ class CommanderAgent:
             "signals": self._build_signals(alert, detective_confirms, detective_detail, intel_result, anomaly_result),
         }
 
+        execution_status = "not_executed"
         if self._response_automation:
             await self.broadcast_command(AgentName.RESPONSE_AUTOMATION, "execute_response", {
                 "action": action,
@@ -129,7 +158,8 @@ class CommanderAgent:
                 "status": response_status.value,
             })
             execution = await self._response_automation.execute_action(response)
-            response["signals"].append(f"[Response Automation] Execution status: {execution.get('execution_status')}")
+            execution_status = execution.get("execution_status", "not_executed")
+            response["signals"].append(f"[Response Automation] Execution status: {execution_status}")
 
         if self._forensics:
             await self.broadcast_command(AgentName.FORENSICS, "build_incident_report", {"target": ip})
@@ -145,8 +175,116 @@ class CommanderAgent:
         if self._ws_manager:
             await self._ws_manager.broadcast_response(response)
 
+        await self._advance_incident_lifecycle(alert, response, execution_status)
+
         self.status = "online"
         return response
+
+    async def _set_alert_lifecycle(self, alert_id: str, status: str, lifecycle: Dict[str, Any]) -> None:
+        result = await update_incident_alerts_status(alert_id, status, lifecycle)
+        updated_alert = result.get("alert")
+        if self._ws_manager and updated_alert:
+            await self._ws_manager.broadcast_alert(updated_alert)
+
+    async def _advance_incident_lifecycle(self, alert: Dict, response: Dict, execution_status: str) -> None:
+        alert_id = alert.get("id")
+        if not alert_id:
+            return
+
+        target = response.get("target", "unknown")
+        response_status = str(response.get("status", "")).lower()
+
+        if response_status == ResponseStatus.MONITORING.value:
+            await self._set_alert_lifecycle(
+                alert_id,
+                "investigating",
+                {
+                    "phase": "monitoring",
+                    "updated_by": self.NAME.value,
+                    "reason": "Containment confidence not high enough for immediate block",
+                    "target": target,
+                    "auto_resolve_seconds": self.MONITORING_AUTO_RESOLVE_SECONDS,
+                },
+            )
+            return
+
+        if response_status == ResponseStatus.BLOCKED.value and execution_status in ("executed", "already_enforced"):
+            mitigated_count = await mark_attacks_mitigated(
+                target,
+                {
+                    "resolved_by": self.NAME.value,
+                    "execution_status": execution_status,
+                },
+            )
+
+            await self._set_alert_lifecycle(
+                alert_id,
+                "blocked",
+                {
+                    "phase": "containment",
+                    "updated_by": self.NAME.value,
+                    "execution_status": execution_status,
+                    "target": target,
+                    "mitigated_attacks": mitigated_count,
+                    "auto_unblock_seconds": max(
+                        int(os.getenv("BLOCK_AUTO_UNBLOCK_SECONDS", "60")),
+                        self.MIN_RESOLUTION_SECONDS,
+                    ),
+                },
+            )
+            return
+
+    async def _auto_resolve_monitoring_alert(self, alert_id: str, target: str, delay_seconds: int) -> None:
+        await asyncio.sleep(delay_seconds)
+
+        latest_alert = await fetch_one("alerts", {"id": alert_id})
+        if not latest_alert:
+            return
+
+        latest_status = str(latest_alert.get("status", "")).lower()
+        if latest_status in ("resolved", "blocked"):
+            return
+
+        updated_count = await resolve_monitoring_responses_for_alert(
+            alert_id,
+            {
+                "updated_by": self.NAME.value,
+                "reason": "Monitoring auto-resolve timer elapsed",
+            },
+        )
+
+        resolution_response = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.utcnow().isoformat(),
+            "action": f"Auto-resolve monitored incident for IP {target}",
+            "target": target,
+            "agent": self.NAME.value,
+            "confidence": 0.6,
+            "reasoning": f"No escalation during {delay_seconds}s monitoring window. Incident auto-resolved.",
+            "status": ResponseStatus.RESOLVED.value,
+            "related_alert_id": alert_id,
+            "signals": [
+                f"[Commander] Monitoring timer elapsed ({delay_seconds}s)",
+                f"[Commander] Converted monitoring responses to resolved: {updated_count}",
+                "[Commander] No further escalation observed",
+                "[Commander] Incident auto-resolved from monitoring",
+            ],
+        }
+        await save_response(resolution_response)
+        if self._ws_manager:
+            await self._ws_manager.broadcast_response(resolution_response)
+
+        await self._set_alert_lifecycle(
+            alert_id,
+            "resolved",
+            {
+                "phase": "resolved",
+                "updated_by": self.NAME.value,
+                "resolved_at": datetime.utcnow().isoformat(),
+                "resolution": "Monitoring window elapsed without escalation",
+                "target": target,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Explainable AI
@@ -165,7 +303,7 @@ class CommanderAgent:
         This is the XAI component.
         """
         parts: List[str] = []
-        confidence = alert.get("confidence", 0.5)
+        confidence = max(float(alert.get("confidence", 0.5)), self.CONFIDENCE_BASELINE)
 
         # Sentry signal
         sentry_event = alert.get("event", "Unknown event")
@@ -176,27 +314,30 @@ class CommanderAgent:
             payload = (verification or {}).get("payload", {})
             failed = payload.get("failed_logins", 0)
             parts.append(f"Cross-correlated with {failed} failed login attempts confirmed by Detective Agent")
-            confidence = min(0.99, confidence + 0.15)
+            confidence = min(0.99, confidence + self.CONFIDENCE_BONUS_DETECTIVE)
         else:
             parts.append("Detective Agent found no corroborating login anomalies")
-            confidence = max(0.30, confidence - 0.10)
+            confidence = max(0.30, confidence - self.CONFIDENCE_PENALTY_NO_CORROBORATION)
 
         if intel_result and intel_result.get("matched"):
             parts.append(f"Threat Intelligence matched source to {intel_result.get('label')}")
-            confidence = min(0.99, confidence + min(0.12, float(intel_result.get("confidence", 0.0)) * 0.1))
+            confidence = min(
+                0.99,
+                confidence + min(0.16, float(intel_result.get("confidence", 0.0)) * self.CONFIDENCE_BONUS_INTEL_FACTOR),
+            )
 
         if anomaly_result and anomaly_result.get("prediction") not in (None, "unavailable", "error"):
             parts.append(
                 f"Anomaly Detection scored event as {str(anomaly_result.get('prediction')).upper()} at {round(float(anomaly_result.get('score', 0.0)), 2)}"
             )
             if anomaly_result.get("anomaly"):
-                confidence = min(0.99, confidence + 0.08)
+                confidence = min(0.99, confidence + self.CONFIDENCE_BONUS_ANOMALY)
 
         # Severity uplift
         sev = alert.get("severity", "medium")
         if sev in ("high", "critical"):
             parts.append(f"Severity classified as {sev.upper()} — immediate response warranted")
-            confidence = min(0.99, confidence + 0.05)
+            confidence = min(0.99, confidence + self.CONFIDENCE_BONUS_SEVERITY)
 
         return " → ".join(parts) + ".", round(confidence, 3)
 

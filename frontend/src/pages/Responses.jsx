@@ -1,8 +1,38 @@
-import { useState, useEffect, useCallback } from 'react'
+import { Fragment, useState, useEffect, useCallback } from 'react'
 import { Database, RefreshCw, Shield, Brain, ChevronDown, ChevronRight } from 'lucide-react'
 import { responsesAPI } from '../services/api'
 import { useWebSocket } from '../services/websocket'
 import { StatusBadge, PageHeader, Spinner, EmptyState, Timestamp, StatCard, ConfidenceBar } from '../components/ui'
+
+function normalizeResponses(rows = []) {
+  const list = [...rows]
+
+  // If an incident is resolved, hide older monitoring rows for the same incident.
+  const resolvedAlertIds = new Set(
+    list
+      .filter((r) => r?.status === 'resolved' && r?.related_alert_id)
+      .map((r) => r.related_alert_id)
+  )
+
+  const filtered = list.filter((r) => {
+    if (r?.status !== 'monitoring') return true
+    if (!r?.related_alert_id) return true
+    return !resolvedAlertIds.has(r.related_alert_id)
+  })
+
+  return filtered.sort((a, b) => String(b?.timestamp || '').localeCompare(String(a?.timestamp || '')))
+}
+
+function buildStatsFromResponses(rows = []) {
+  const stats = { total: rows.length, blocked: 0, monitoring: 0, resolved: 0 }
+  for (const r of rows) {
+    const status = String(r?.status || '').toLowerCase()
+    if (status === 'blocked') stats.blocked += 1
+    if (status === 'monitoring') stats.monitoring += 1
+    if (status === 'resolved') stats.resolved += 1
+  }
+  return stats
+}
 
 // ── XAI Reasoning Expander ────────────────────────────────────────────
 function ReasoningPanel({ reasoning, signals = [] }) {
@@ -108,8 +138,8 @@ function ResponseTable({ responses }) {
           </thead>
           <tbody>
             {responses.map((r, i) => (
-              <>
-                <tr key={r.id || i} className="cursor-pointer" onClick={() => setExpanded(expanded === i ? null : i)}>
+              <Fragment key={r.id || `row-${i}`}>
+                <tr className="cursor-pointer" onClick={() => setExpanded(expanded === i ? null : i)}>
                   <td><Timestamp value={r.timestamp} /></td>
                   <td className="text-slate-300 font-semibold max-w-[200px]">
                     <span className="block truncate">{r.action}</span>
@@ -131,39 +161,47 @@ function ResponseTable({ responses }) {
                       className="flex items-center gap-1 text-[11px] font-mono text-cyan-400/60 hover:text-cyan-400 transition-colors"
                       onClick={e => { e.stopPropagation(); setExpanded(expanded === i ? null : i) }}
                     >
-                      <Brain className="w-3 h-3" />
+                      <ChevronDown className={`w-3 h-3 transition-transform ${expanded === i ? 'rotate-180' : ''}`} />
                       {expanded === i ? 'hide' : 'view'}
                     </button>
                   </td>
                 </tr>
                 {expanded === i && (
-                  <tr key={`${r.id}-xai`} className="bg-slate-950/60">
-                    <td colSpan={7} className="px-4 pb-4 pt-0">
-                      <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-2 animate-fade-in">
+                  <tr className="bg-slate-900/80 border-t-2 border-cyan-500/20">
+                    <td colSpan={7} className="px-4 py-4">
+                      <div className="space-y-3 animate-fade-in">
                         {(r.signals || []).length > 0 && (
-                          <div className="space-y-1 mb-3">
+                          <div className="space-y-2">
+                            <p className="text-[10px] font-mono font-semibold text-cyan-400 uppercase tracking-wider">Signal Chain</p>
                             {r.signals.map((s, si) => (
-                              <div key={si} className="flex items-start gap-2 text-[11px] font-mono">
-                                <span className="text-slate-700 shrink-0">{si + 1}.</span>
-                                <span className={`shrink-0 font-semibold ${
+                              <div key={si} className="flex items-start gap-2 text-[11px] font-mono bg-slate-950/40 p-2 rounded border-l-2 border-cyan-500/30">
+                                <span className="text-slate-600 shrink-0 font-semibold">{si + 1}.</span>
+                                <span className={`shrink-0 font-bold ${
                                   s.startsWith('[Sentry]') ? 'text-cyan-400' :
                                   s.startsWith('[Detective]') ? 'text-purple-400' :
                                   s.startsWith('[Commander]') ? 'text-yellow-400' : 'text-slate-400'
                                 }`}>{s.match(/^\[.*?\]/)?.[0]}</span>
-                                <span className="text-slate-500">{s.replace(/^\[.*?\]\s*/, '')}</span>
+                                <span className="text-slate-300">{s.replace(/^\[.*?\]\s*/, '')}</span>
                               </div>
                             ))}
                           </div>
                         )}
-                        <p className="text-[11px] font-mono text-slate-500 leading-relaxed border-t border-slate-800 pt-2">
-                          <span className="text-cyan-400/60 mr-2">REASONING:</span>
-                          {r.reasoning}
-                        </p>
+                        {r.reasoning && (
+                          <div className="bg-slate-950/40 border border-slate-800 rounded p-3 space-y-1">
+                            <p className="text-[10px] font-mono font-semibold text-cyan-400 uppercase tracking-wider">XAI Reasoning</p>
+                            <p className="text-[11px] font-mono text-slate-300 leading-relaxed">
+                              {r.reasoning}
+                            </p>
+                          </div>
+                        )}
+                        {(!r.reasoning && (!r.signals || r.signals.length === 0)) && (
+                          <p className="text-[11px] font-mono text-slate-600 italic">No reasoning data available</p>
+                        )}
                       </div>
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -186,8 +224,13 @@ export default function Responses() {
         responsesAPI.list(100),
         responsesAPI.stats(),
       ])
-      if (r.status === 'fulfilled') setResponses(r.value.data.responses || [])
-      if (s.status === 'fulfilled') setStats(s.value.data)
+      if (r.status === 'fulfilled') {
+        const normalized = normalizeResponses(r.value.data.responses || [])
+        setResponses(normalized)
+        setStats(buildStatsFromResponses(normalized))
+      } else if (s.status === 'fulfilled') {
+        setStats(s.value.data)
+      }
     } finally { setLoading(false) }
   }, [])
 
@@ -196,12 +239,11 @@ export default function Responses() {
 
   const handleWs = useCallback((msg) => {
     if (msg.type === 'response') {
-      setResponses(p => [msg.data, ...p].slice(0, 100))
-      setStats(p => ({
-        ...p,
-        total: (p.total || 0) + 1,
-        [msg.data.status]: (p[msg.data.status] || 0) + 1,
-      }))
+      setResponses((p) => {
+        const normalized = normalizeResponses([msg.data, ...p]).slice(0, 100)
+        setStats(buildStatsFromResponses(normalized))
+        return normalized
+      })
     }
   }, [])
   useWebSocket(handleWs)

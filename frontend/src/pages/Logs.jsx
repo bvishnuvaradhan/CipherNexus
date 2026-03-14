@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Terminal, RefreshCw, Filter, Download } from 'lucide-react'
+import { Terminal, RefreshCw, Filter, Download, ChevronDown } from 'lucide-react'
 import { logsAPI } from '../services/api'
 import { useWebSocket } from '../services/websocket'
 import { SeverityBadge, PageHeader, Spinner, EmptyState, Timestamp } from '../components/ui'
@@ -28,6 +28,7 @@ export default function Logs() {
   const [agentFilter, setAgentFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [liveMode, setLiveMode] = useState(true)
+  const [expandedLogId, setExpandedLogId] = useState(null)
 
   const load = useCallback(async () => {
     try {
@@ -172,24 +173,77 @@ export default function Logs() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((log, i) => (
-                  <tr key={log.id || i} className="animate-fade-in">
-                    <td><Timestamp value={log.timestamp} /></td>
-                    <td className="text-slate-400">
-                      {EVENT_TYPE_LABELS[log.event_type] || log.event_type}
-                    </td>
-                    <td>
-                      <span className={`font-semibold ${AGENT_COLORS[log.agent] || 'text-slate-400'}`}>
-                        {log.agent}
-                      </span>
-                    </td>
-                    <td><SeverityBadge level={log.severity} /></td>
-                    <td className="text-cyan-400/70">{log.source_ip || '—'}</td>
-                    <td className="text-slate-400 max-w-xs">
-                      <span className="block truncate" title={log.message}>{log.message}</span>
-                    </td>
-                  </tr>
-                ))}
+                {filtered.flatMap((log, i) => {
+                  const isForensics = log.agent === 'Forensics'
+                  const rows = [
+                    <tr 
+                      key={`${log.id}-main`}
+                      className={`animate-fade-in transition-colors ${isForensics ? 'hover:bg-slate-900/40 cursor-pointer' : ''}`}
+                      onClick={() => isForensics && setExpandedLogId(expandedLogId === log.id ? null : log.id)}
+                    >
+                      <td>
+                        <div className="flex items-center gap-2">
+                          {isForensics && log.details && (
+                            <ChevronDown 
+                              className={`w-3.5 h-3.5 text-slate-500 transition-transform ${expandedLogId === log.id ? 'rotate-180' : ''}`}
+                            />
+                          )}
+                          <Timestamp value={log.timestamp} />
+                        </div>
+                      </td>
+                      <td className="text-slate-400">
+                        {EVENT_TYPE_LABELS[log.event_type] || log.event_type}
+                      </td>
+                      <td>
+                        <span className={`font-semibold ${AGENT_COLORS[log.agent] || 'text-slate-400'}`}>
+                          {log.agent}
+                        </span>
+                      </td>
+                      <td><SeverityBadge level={log.severity} /></td>
+                      <td className="text-cyan-400/70">{log.source_ip || '—'}</td>
+                      <td className="text-slate-400 max-w-xs">
+                        <span className="block truncate" title={log.message}>{log.message}</span>
+                      </td>
+                    </tr>
+                  ]
+                  
+                  if (isForensics && expandedLogId === log.id && log.details) {
+                    rows.push(
+                      <tr key={`${log.id}-details`} className="bg-slate-950/60 animate-fade-in">
+                        <td colSpan="6" className="p-4">
+                          <div className="space-y-3">
+                            {log.details.summary && (
+                              <div>
+                                <p className="text-xs font-mono font-semibold text-cyan-400 uppercase mb-1">Summary</p>
+                                <p className="text-sm text-slate-300 bg-slate-900/40 p-2 rounded border border-slate-800">
+                                  {log.details.summary}
+                                </p>
+                              </div>
+                            )}
+                            {log.details.timeline && Array.isArray(log.details.timeline) && (
+                              <div>
+                                <p className="text-xs font-mono font-semibold text-cyan-400 uppercase mb-2">Timeline</p>
+                                <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                                  {log.details.timeline.map((event, idx) => (
+                                    <div 
+                                      key={idx}
+                                      className="flex gap-3 text-xs text-slate-400 bg-slate-900/30 p-2 rounded border-l-2 border-cyan-500/30"
+                                    >
+                                      <span className="text-cyan-500 font-semibold shrink-0">[{idx + 1}]</span>
+                                      <span>{event}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  }
+                  
+                  return rows
+                })}
               </tbody>
             </table>
           </div>

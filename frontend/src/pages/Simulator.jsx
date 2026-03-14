@@ -60,6 +60,121 @@ const COLOR_MAP = {
   yellow: { card: 'border-yellow-500/20 ring-yellow-500/5', icon: 'bg-yellow-500/10 text-yellow-400', btn: 'border-yellow-500/40 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20', label: 'text-yellow-400' },
 }
 
+function buildA2APathEntry(msg) {
+  if (msg.type === 'simulation_started') {
+    return {
+      id: `sim-${msg.timestamp}`,
+      kind: 'system',
+      from: 'Simulator',
+      to: 'Pipeline',
+      event: msg.data?.attack_type || 'simulation_started',
+      timestamp: msg.timestamp,
+      note: `Simulation started for ${msg.data?.source_ip || 'unknown ip'}`,
+    }
+  }
+
+  if (msg.type === 'agent_message') {
+    return {
+      id: msg.data?.id || `agent-${msg.timestamp}`,
+      kind: msg.data?.message_type || 'agent',
+      from: msg.data?.from_agent || 'Unknown',
+      to: msg.data?.to_agent || 'Unknown',
+      event: msg.data?.event || 'event',
+      timestamp: msg.data?.timestamp || msg.timestamp,
+      note: msg.data?.ip ? `IP ${msg.data.ip}` : undefined,
+    }
+  }
+
+  if (msg.type === 'ml_prediction') {
+    return {
+      id: `ml-${msg.timestamp}`,
+      kind: 'ml',
+      from: 'Anomaly Detection',
+      to: 'Commander',
+      event: `${String(msg.data?.result?.prediction || 'unknown').toUpperCase()} scored`,
+      timestamp: msg.timestamp,
+      note: `Score ${Math.round((msg.data?.result?.score || 0) * 100)}%`,
+    }
+  }
+
+  if (msg.type === 'response') {
+    return {
+      id: msg.data?.id || `resp-${msg.timestamp}`,
+      kind: 'response',
+      from: msg.data?.agent || 'Commander',
+      to: 'System',
+      event: msg.data?.action || 'response',
+      timestamp: msg.data?.timestamp || msg.timestamp,
+      note: `Status ${String(msg.data?.status || '').toUpperCase()}`,
+    }
+  }
+
+  if (msg.type === 'alert') {
+    return {
+      id: msg.data?.id || `alert-${msg.timestamp}`,
+      kind: 'alert',
+      from: msg.data?.agent || 'System',
+      to: 'Commander',
+      event: msg.data?.event || 'alert',
+      timestamp: msg.data?.timestamp || msg.timestamp,
+      note: msg.data?.severity ? `Severity ${String(msg.data.severity).toUpperCase()}` : undefined,
+    }
+  }
+
+  return null
+}
+
+function A2APathPanel({ path = [] }) {
+  return (
+    <div className="cyber-card overflow-hidden">
+      <div className="px-4 py-3 border-b border-slate-800 bg-slate-950/40 flex items-center justify-between gap-3">
+        <div>
+          <p className="font-mono text-sm font-semibold text-slate-300">A2A Path</p>
+          <p className="font-mono text-[11px] text-slate-600">Flow chart of agent-to-agent activity for the latest simulation</p>
+        </div>
+        <p className="font-mono text-[11px] text-slate-600">{path.length} steps</p>
+      </div>
+
+      {!path.length ? (
+        <div className="py-12 text-center">
+          <p className="font-mono text-xs text-slate-600">Run a simulation to render the A2A flow path</p>
+        </div>
+      ) : (
+        <div className="p-4 overflow-x-auto">
+          <div className="flex items-stretch gap-3 min-w-max pb-2">
+            {path.map((step, index) => (
+              <div key={step.id || index} className="flex items-center gap-3">
+                <div className="w-[260px] rounded-xl border border-slate-800 bg-slate-950/60 p-4 ring-1 ring-slate-800/60">
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <span className="text-[10px] font-mono text-slate-600">STEP {index + 1}</span>
+                    <Timestamp value={step.timestamp} />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="px-2 py-1 rounded border border-cyan-500/20 bg-cyan-500/10 font-mono text-[11px] text-cyan-400">{step.from}</span>
+                      <span className="font-mono text-xs text-slate-700">→</span>
+                      <span className="px-2 py-1 rounded border border-purple-500/20 bg-purple-500/10 font-mono text-[11px] text-purple-400">{step.to}</span>
+                    </div>
+                    <p className="font-mono text-xs text-slate-300 leading-relaxed">{step.event}</p>
+                    {step.note && <p className="font-mono text-[11px] text-slate-500">{step.note}</p>}
+                  </div>
+                </div>
+                {index < path.length - 1 && (
+                  <div className="flex flex-col items-center justify-center gap-2 px-1">
+                    <span className="h-px w-10 bg-slate-700" />
+                    <span className="font-mono text-slate-600 text-xs">→</span>
+                    <span className="h-px w-10 bg-slate-700" />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Terminal-style live event log ─────────────────────────────────────
 function SimTerminal({ events }) {
   return (
@@ -237,7 +352,7 @@ export default function Simulator() {
   const [running, setRunning] = useState(null)
   const [termEvents, setTermEvents] = useState([])
   const [lastResult, setLastResult] = useState(null)
-  const [wsEvents, setWsEvents] = useState([])
+  const [a2aPath, setA2aPath] = useState([])
   const [mlThreshold, setMlThreshold] = useState(0.5)
   const [thresholdDraft, setThresholdDraft] = useState('0.5')
 
@@ -247,6 +362,11 @@ export default function Simulator() {
   }, [])
 
   const handleWs = useCallback((msg) => {
+    const pathEntry = buildA2APathEntry(msg)
+    if (pathEntry) {
+      setA2aPath((prev) => [...prev, pathEntry].slice(-40))
+    }
+
     if (msg.type === 'simulation_started') {
       addTermEvent('agent', '[WS]', `Simulation broadcast received — attack in progress`)
     }
@@ -306,6 +426,7 @@ export default function Simulator() {
     setRunning(attackType)
     setTermEvents([])
     setLastResult(null)
+    setA2aPath([])
 
     const label = ATTACK_CONFIGS.find(c => c.type === attackType)?.label
     addTermEvent('warn', '[INIT]', `Launching ${label} simulation — intensity: ${intensity.toUpperCase()}`)
@@ -410,6 +531,8 @@ export default function Simulator() {
           </div>
         )}
       </div>
+
+      <A2APathPanel path={a2aPath} />
     </div>
   )
 }
