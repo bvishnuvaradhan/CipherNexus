@@ -19,6 +19,7 @@ from routes.simulator import router as simulator_router
 from routes.data import router as data_router
 from routes.ml import router as ml_router
 from routes.auth import router as auth_router
+from routes.labs import router as labs_router
 from websocket.manager import websocket_router, manager as ws_manager
 from agents.orchestrator import AgentOrchestrator
 
@@ -70,6 +71,7 @@ app.include_router(responses_router, prefix="/responses", tags=["Responses"])
 app.include_router(simulator_router, prefix="/simulate-attack", tags=["Simulator"])
 app.include_router(data_router, prefix="/data", tags=["Data"])
 app.include_router(ml_router, prefix="/ml", tags=["ML"])
+app.include_router(labs_router, prefix="/labs", tags=["Labs"])
 app.include_router(websocket_router, tags=["WebSocket"])
 
 

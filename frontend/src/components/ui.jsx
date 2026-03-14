@@ -157,12 +157,14 @@ export function EmptyState({ message = 'No data available', icon: Icon }) {
 // ── Timestamp ─────────────────────────────────────────────────────────
 export function Timestamp({ value }) {
   if (!value) return <span className="text-slate-600">—</span>
-  const raw = String(value)
-  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw)
-  const normalized = hasTimezone ? raw : `${raw}Z`
-  const d = new Date(normalized)
-  if (Number.isNaN(d.getTime())) return <span className="text-slate-600">—</span>
-  const time = d.toLocaleTimeString('en-US', { hour12: false })
+  // Backend sends UTC times without 'Z' suffix — append it if missing
+  let ts = value
+  if (typeof ts === 'string' && !ts.endsWith('Z') && !ts.includes('+') && !ts.includes('-', 10)) {
+    ts = ts + 'Z'
+  }
+  const d = new Date(ts)
+  // Use local time formatting
+  const time = d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
   const date = d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' })
   return (
     <span className="font-mono text-xs text-slate-500">

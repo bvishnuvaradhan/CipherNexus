@@ -53,6 +53,13 @@ class AttackType(str, Enum):
     DATA_EXFILTRATION = "data_exfiltration"
     TRAFFIC_SPIKE = "traffic_spike"
     MALWARE = "malware"
+    DDOS = "ddos"
+    SQL_INJECTION = "sql_injection"
+    XSS = "xss"
+    RANSOMWARE = "ransomware"
+    MITM = "mitm"
+    DNS_SPOOFING = "dns_spoofing"
+    COMMAND_CONTROL = "command_control"
 
 
 class LogEventType(str, Enum):
@@ -151,7 +158,58 @@ class AgentStatus(BaseModel):
 class SimulateAttackRequest(BaseModel):
     attack_type: AttackType
     source_ip: Optional[str] = None
+    target_ip: Optional[str] = "192.168.0.1"
     intensity: Optional[str] = "medium"  # low | medium | high
+    # Login / brute-force parameters
+    username: Optional[str] = None
+    attempt_count: Optional[int] = None
+    auth_protocol: Optional[str] = None       # ssh | rdp | http_basic | ldap
+    password_list: Optional[str] = None       # rockyou | dictionary | custom
+    # Port scan parameters
+    port_range_start: Optional[int] = None
+    port_range_end: Optional[int] = None
+    scan_technique: Optional[str] = None      # syn_stealth | tcp_connect | udp | xmas | null_scan
+    scan_timing: Optional[str] = None         # paranoid | sneaky | normal | aggressive
+    # Suspicious login parameters
+    device_fingerprint: Optional[str] = None  # unknown_device | mobile_emulator | headless_browser
+    # Data exfiltration parameters
+    payload_size_mb: Optional[int] = None
+    exfil_protocol: Optional[str] = None      # https | dns_tunnel | ftp | sftp | icmp
+    destination_type: Optional[str] = None    # external_cloud | tor_exit | foreign_asn
+    exfil_encryption: Optional[str] = None    # none | aes256 | custom
+    # Traffic / DDoS parameters
+    packet_rate: Optional[int] = None
+    flood_type: Optional[str] = None          # udp | tcp_syn | http | slowloris | amplification
+    botnet_size: Optional[int] = None
+    spike_protocol: Optional[str] = None      # udp | tcp | icmp | http
+    source_spoofing: Optional[bool] = None
+    # SQL injection parameters
+    injection_type: Optional[str] = None      # sql: union | blind | time_based
+    target_endpoint: Optional[str] = None
+    waf_evasion: Optional[str] = None         # none | encoding | case_switch | comment_injection
+    database_type: Optional[str] = None       # mysql | postgresql | mssql | oracle
+    # XSS parameters
+    xss_type: Optional[str] = None            # xss: reflected | stored | dom
+    payload_encoding: Optional[str] = None    # none | base64 | url_encode | html_entities
+    # Ransomware parameters
+    spread_rate: Optional[str] = None         # ransomware: slow | medium | fast
+    encryption_algo: Optional[str] = None     # aes256 | rsa2048 | chacha20
+    ransom_family: Optional[str] = None       # lockbit | blackcat | cl0p | revil
+    # MITM parameters
+    target_protocol: Optional[str] = None     # mitm: http | https | ftp
+    mitm_technique: Optional[str] = None      # arp_poison | ssl_strip | dns_hijack
+    capture_type: Optional[str] = None        # credentials | full_traffic | selective
+    # DNS spoofing parameters
+    target_domain: Optional[str] = None       # dns_spoofing: domain to hijack
+    redirect_target: Optional[str] = None     # IP to redirect to
+    record_type: Optional[str] = None         # A | AAAA | CNAME | MX
+    # C2 beacon parameters
+    beacon_interval: Optional[int] = None     # c2: seconds between beacons
+    c2_protocol: Optional[str] = None         # https | dns_tunnel | irc | custom
+    persistence_method: Optional[str] = None  # registry | scheduled_task | wmi | service
+    jitter_percent: Optional[int] = None      # 0-50, randomness in beacon timing
+    # General
+    duration_seconds: Optional[int] = 30
 
 
 class LoginRequest(BaseModel):
