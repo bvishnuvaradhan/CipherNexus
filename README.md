@@ -251,6 +251,35 @@ curl -X POST http://localhost:8000/data/seed-real \
 
 Optional: include `seed` for deterministic data generation across runs.
 
+To remove previous data from MongoDB/mock collections:
+
+```bash
+curl -X POST http://localhost:8000/data/clear \
+  -H "Content-Type: application/json" \
+  -d '{"confirm":true,"collections":["alerts","logs","agent_messages","responses","attacks"]}'
+```
+
+---
+
+## 🤖 Train Using Dataset Folder Only
+
+Training reads CSV files from the top-level `dataset/` folder and does not use MongoDB data.
+
+```bash
+cd backend
+pip install -r requirements.txt
+
+python ml/train_cicids.py \
+  --dataset-dir ../dataset \
+  --output-dir ./training_artifacts \
+  --max-rows-per-file 120000
+```
+
+Outputs:
+- `training_artifacts/supervised_binary_sgd.joblib`
+- `training_artifacts/unsupervised_iforest.joblib`
+- `training_artifacts/metrics_report.json`
+
 ---
 
 ## 🎨 Design System

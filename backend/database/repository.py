@@ -105,6 +105,29 @@ async def update_document(collection: str, query: Dict, update: Dict) -> None:
         await col.update_one(query, update)
 
 
+async def clear_collections(collections: Optional[List[str]] = None) -> Dict[str, int]:
+    """Delete all documents from selected collections."""
+    names = collections or ["alerts", "logs", "agent_messages", "responses", "attacks"]
+    result: Dict[str, int] = {}
+    db = get_db()
+
+    for name in names:
+        try:
+            if db is not None:
+                delete_result = await db[name].delete_many({})
+                result[name] = int(delete_result.deleted_count)
+            else:
+                col = _mock_col(name)
+                count_before = await col.count_documents({})
+                await col.delete_many({})
+                result[name] = int(count_before)
+        except Exception as e:
+            print(f"[WARN] Failed to clear collection '{name}': {e}")
+            result[name] = -1
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Domain-specific helpers
 # ---------------------------------------------------------------------------
