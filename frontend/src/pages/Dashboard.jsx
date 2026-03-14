@@ -70,12 +70,19 @@ function AgentCard({ agent }) {
     Sentry:    'cyan',
     Detective: 'purple',
     Commander: 'yellow',
+    'Threat Intelligence': 'rose',
+    'Anomaly Detection': 'emerald',
+    'Response Automation': 'orange',
+    Forensics: 'purple',
   }
   const color = agentColors[agent.name] || 'cyan'
   const colorMap = {
     cyan:   { text: 'text-cyan-400',   ring: 'ring-cyan-500/20', bg: 'bg-cyan-500/10' },
     purple: { text: 'text-purple-400', ring: 'ring-purple-500/20', bg: 'bg-purple-500/10' },
     yellow: { text: 'text-yellow-400', ring: 'ring-yellow-500/20', bg: 'bg-yellow-500/10' },
+    rose:   { text: 'text-rose-400', ring: 'ring-rose-500/20', bg: 'bg-rose-500/10' },
+    emerald:{ text: 'text-emerald-400', ring: 'ring-emerald-500/20', bg: 'bg-emerald-500/10' },
+    orange: { text: 'text-orange-400', ring: 'ring-orange-500/20', bg: 'bg-orange-500/10' },
   }
   const c = colorMap[color]
 

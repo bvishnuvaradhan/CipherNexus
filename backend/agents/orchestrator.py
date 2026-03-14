@@ -13,8 +13,11 @@ from typing import Optional
 from agents.sentry import SentryAgent
 from agents.detective import DetectiveAgent
 from agents.commander import CommanderAgent
+from agents.threat_intelligence import ThreatIntelligenceAgent
+from agents.anomaly_detection import AnomalyDetectionAgent
+from agents.response_automation import ResponseAutomationAgent
+from agents.forensics import ForensicsAgent
 from database.repository import save_alert
-from ml.predictor import predict_anomaly
 
 
 class AgentOrchestrator:
@@ -30,6 +33,10 @@ class AgentOrchestrator:
         self.sentry = SentryAgent()
         self.detective = DetectiveAgent()
         self.commander = CommanderAgent()
+        self.threat_intelligence = ThreatIntelligenceAgent()
+        self.anomaly_detection = AnomalyDetectionAgent()
+        self.response_automation = ResponseAutomationAgent()
+        self.forensics = ForensicsAgent()
         self._bus: asyncio.Queue = asyncio.Queue()
         self._ws_manager: Optional[object] = None
         self._running = False
@@ -40,13 +47,23 @@ class AgentOrchestrator:
         self.sentry.attach_bus(self._bus)
         self.detective.attach_bus(self._bus)
         self.commander.attach_bus(self._bus)
+        self.response_automation.attach_bus(self._bus)
+        self.forensics.attach_bus(self._bus)
 
         # Give Commander a direct handle to Detective for sync queries
         self.commander.attach_detective(self.detective)
+        self.commander.attach_threat_intelligence(self.threat_intelligence)
+        self.commander.attach_anomaly_detection(self.anomaly_detection)
+        self.commander.attach_response_automation(self.response_automation)
+        self.commander.attach_forensics(self.forensics)
 
         print("[ONLINE] Sentry Agent")
         print("[ONLINE] Detective Agent")
         print("[ONLINE] Commander Agent")
+        print("[ONLINE] Threat Intelligence Agent")
+        print("[ONLINE] Anomaly Detection Agent")
+        print("[ONLINE] Response Automation Agent")
+        print("[ONLINE] Forensics Agent")
 
     def attach_ws_manager(self, ws_manager):
         """Inject the WebSocket manager for live broadcasts."""
@@ -105,7 +122,8 @@ class AgentOrchestrator:
 
         # Commander processes alerts from field agents
         if to_agent == "Commander" and msg_type == "alert":
-            await self._ml_score_live_alert(msg)
+            intel_result = self.threat_intelligence.assess_ip(msg.get("ip"))
+            anomaly_result = await self._ml_score_live_alert(msg)
 
             # Build a minimal alert dict for Commander
             alert = {
@@ -115,6 +133,10 @@ class AgentOrchestrator:
                 "severity": msg.get("severity", "medium"),
                 "source_ip": msg.get("ip"),
                 "confidence": msg.get("payload", {}).get("confidence", 0.70),
+                "details": {
+                    "threat_intelligence": intel_result,
+                    "anomaly_detection": anomaly_result,
+                },
             }
             await self.commander.process_alert(alert)
 
@@ -122,7 +144,7 @@ class AgentOrchestrator:
         """Run ML scoring on live A2A alert messages and push correlated alerts."""
         try:
             flow_features = self._build_flow_features_from_msg(msg)
-            ml_result = predict_anomaly(flow_features)
+            ml_result = self.anomaly_detection.analyze_flow(flow_features, msg.get("event", "live_alert"))
 
             if self._ws_manager:
                 await self._ws_manager.broadcast({
@@ -158,11 +180,13 @@ class AgentOrchestrator:
                 await save_alert(correlated_alert)
                 if self._ws_manager:
                     await self._ws_manager.broadcast_alert(correlated_alert)
+            return ml_result
         except FileNotFoundError:
             # Allow platform to run without trained artifacts.
-            return
+            return {"prediction": "unavailable", "reason": "model_not_trained"}
         except Exception as e:
             print(f"[WARN] ML live-scoring failed: {e}")
+            return {"prediction": "error", "reason": str(e)}
 
     def _severity_from_score(self, score: float) -> str:
         if score >= 0.9:
@@ -234,6 +258,10 @@ class AgentOrchestrator:
             self.sentry.get_status(),
             self.detective.get_status(),
             self.commander.get_status(),
+            self.threat_intelligence.get_status(),
+            self.anomaly_detection.get_status(),
+            self.response_automation.get_status(),
+            self.forensics.get_status(),
         ]
 
     async def trigger_simulation(self, attack_type: str, ip: str, intensity: str = "medium") -> dict:

@@ -42,6 +42,10 @@ class CommanderAgent:
         self.confidence_scores: List[float] = []
         self._message_bus = None
         self._detective: Any = None   # injected
+        self._threat_intelligence: Any = None
+        self._anomaly_detection: Any = None
+        self._response_automation: Any = None
+        self._forensics: Any = None
         self.start_time = datetime.utcnow()
         self._blocked_ips: set = set()
         self._ws_manager: Any = None  # injected for live push
@@ -51,6 +55,18 @@ class CommanderAgent:
 
     def attach_detective(self, detective):
         self._detective = detective
+
+    def attach_threat_intelligence(self, threat_intelligence):
+        self._threat_intelligence = threat_intelligence
+
+    def attach_anomaly_detection(self, anomaly_detection):
+        self._anomaly_detection = anomaly_detection
+
+    def attach_response_automation(self, response_automation):
+        self._response_automation = response_automation
+
+    def attach_forensics(self, forensics):
+        self._forensics = forensics
 
     def attach_ws_manager(self, ws_manager):
         self._ws_manager = ws_manager
@@ -80,9 +96,13 @@ class CommanderAgent:
             failed = payload.get("failed_logins", 0)
             detective_detail = f"{failed} failed login attempts confirmed by Detective" if detective_confirms else "No suspicious login activity found"
 
+        details = alert.get("details", {}) or {}
+        intel_result = details.get("threat_intelligence") or None
+        anomaly_result = details.get("anomaly_detection") or None
+
         # Step 2 — build XAI reasoning
         reasoning, confidence = self._build_reasoning(
-            alert, verification, detective_confirms
+            alert, verification, detective_confirms, intel_result, anomaly_result
         )
 
         # Step 3 — decide action
@@ -99,9 +119,25 @@ class CommanderAgent:
             "reasoning": reasoning,
             "status": response_status.value,
             "related_alert_id": alert.get("id"),
-            "signals": self._build_signals(alert, detective_confirms, detective_detail),
+            "signals": self._build_signals(alert, detective_confirms, detective_detail, intel_result, anomaly_result),
         }
+
+        if self._response_automation:
+            await self.broadcast_command(AgentName.RESPONSE_AUTOMATION, "execute_response", {
+                "action": action,
+                "target": ip,
+                "status": response_status.value,
+            })
+            execution = await self._response_automation.execute_action(response)
+            response["signals"].append(f"[Response Automation] Execution status: {execution.get('execution_status')}")
+
+        if self._forensics:
+            await self.broadcast_command(AgentName.FORENSICS, "build_incident_report", {"target": ip})
+            report = await self._forensics.create_incident_report(alert, response, intel_result, anomaly_result)
+            response["signals"].append(f"[Forensics] {report.get('summary')}")
+
         await save_response(response)
+
         await self._log_action(action, ip, confidence)
         self._update_stats(action, confidence)
 
@@ -117,7 +153,12 @@ class CommanderAgent:
     # ------------------------------------------------------------------
 
     def _build_reasoning(
-        self, alert: Dict, verification: Optional[Dict], detective_confirms: bool
+        self,
+        alert: Dict,
+        verification: Optional[Dict],
+        detective_confirms: bool,
+        intel_result: Optional[Dict],
+        anomaly_result: Optional[Dict],
     ) -> tuple[str, float]:
         """
         Construct a human-readable reasoning chain and confidence score.
@@ -140,6 +181,17 @@ class CommanderAgent:
             parts.append("Detective Agent found no corroborating login anomalies")
             confidence = max(0.30, confidence - 0.10)
 
+        if intel_result and intel_result.get("matched"):
+            parts.append(f"Threat Intelligence matched source to {intel_result.get('label')}")
+            confidence = min(0.99, confidence + min(0.12, float(intel_result.get("confidence", 0.0)) * 0.1))
+
+        if anomaly_result and anomaly_result.get("prediction") not in (None, "unavailable", "error"):
+            parts.append(
+                f"Anomaly Detection scored event as {str(anomaly_result.get('prediction')).upper()} at {round(float(anomaly_result.get('score', 0.0)), 2)}"
+            )
+            if anomaly_result.get("anomaly"):
+                confidence = min(0.99, confidence + 0.08)
+
         # Severity uplift
         sev = alert.get("severity", "medium")
         if sev in ("high", "critical"):
@@ -148,10 +200,23 @@ class CommanderAgent:
 
         return " → ".join(parts) + ".", round(confidence, 3)
 
-    def _build_signals(self, alert: Dict, detective_confirms: bool, detective_detail: str) -> List[str]:
+    def _build_signals(
+        self,
+        alert: Dict,
+        detective_confirms: bool,
+        detective_detail: str,
+        intel_result: Optional[Dict],
+        anomaly_result: Optional[Dict],
+    ) -> List[str]:
         signals = [f"[Sentry] {alert.get('event', 'Anomaly detected')} from {alert.get('source_ip', 'unknown')}"]
         if detective_confirms:
             signals.append(f"[Detective] {detective_detail}")
+        if intel_result and intel_result.get("matched"):
+            signals.append(f"[Threat Intelligence] {intel_result.get('label')} ({intel_result.get('source')})")
+        if anomaly_result and anomaly_result.get("prediction") not in (None, "unavailable", "error"):
+            signals.append(
+                f"[Anomaly Detection] {str(anomaly_result.get('prediction')).upper()} score={round(float(anomaly_result.get('score', 0.0)), 3)}"
+            )
         signals.append(f"[Commander] Threat severity: {alert.get('severity', 'unknown').upper()}")
         return signals
 

@@ -6,6 +6,10 @@ const AGENT_COLORS = {
   Sentry:    { text: 'text-cyan-400',   bg: 'bg-cyan-500/10 border-cyan-500/20' },
   Detective: { text: 'text-purple-400', bg: 'bg-purple-500/10 border-purple-500/20' },
   Commander: { text: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/20' },
+  'Threat Intelligence': { text: 'text-rose-400', bg: 'bg-rose-500/10 border-rose-500/20' },
+  'Anomaly Detection': { text: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
+  'Response Automation': { text: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/20' },
+  Forensics: { text: 'text-indigo-400', bg: 'bg-indigo-500/10 border-indigo-500/20' },
   System:    { text: 'text-slate-400',  bg: 'bg-slate-700/30 border-slate-700' },
 }
 

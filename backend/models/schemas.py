@@ -25,6 +25,10 @@ class AgentName(str, Enum):
     SENTRY = "Sentry"
     DETECTIVE = "Detective"
     COMMANDER = "Commander"
+    THREAT_INTELLIGENCE = "Threat Intelligence"
+    ANOMALY_DETECTION = "Anomaly Detection"
+    RESPONSE_AUTOMATION = "Response Automation"
+    FORENSICS = "Forensics"
     SYSTEM = "System"
 
 

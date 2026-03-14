@@ -33,6 +33,42 @@ const AGENT_META = {
     textColor: 'text-yellow-400',
     ring: 'ring-yellow-500/10',
   },
+  'Threat Intelligence': {
+    color: 'rose',
+    icon: Target,
+    desc: 'Correlates IOC feeds, reputation data, and known malicious infrastructure to improve confidence and reduce false positives.',
+    bg: 'from-rose-500/5 to-transparent',
+    border: 'border-rose-500/20',
+    textColor: 'text-rose-400',
+    ring: 'ring-rose-500/10',
+  },
+  'Anomaly Detection': {
+    color: 'emerald',
+    icon: TrendingUp,
+    desc: 'Runs behavioral anomaly analysis and ML scoring to identify unusual patterns and unknown attack activity.',
+    bg: 'from-emerald-500/5 to-transparent',
+    border: 'border-emerald-500/20',
+    textColor: 'text-emerald-400',
+    ring: 'ring-emerald-500/10',
+  },
+  'Response Automation': {
+    color: 'orange',
+    icon: Shield,
+    desc: 'Executes defensive actions such as IP blocking, target isolation, and administrator notifications once threats are confirmed.',
+    bg: 'from-orange-500/5 to-transparent',
+    border: 'border-orange-500/20',
+    textColor: 'text-orange-400',
+    ring: 'ring-orange-500/10',
+  },
+  Forensics: {
+    color: 'indigo',
+    icon: Clock,
+    desc: 'Reconstructs attack timelines, summarizes incident evidence, and generates investigation-ready forensic context.',
+    bg: 'from-indigo-500/5 to-transparent',
+    border: 'border-indigo-500/20',
+    textColor: 'text-indigo-400',
+    ring: 'ring-indigo-500/10',
+  },
 }
 
 function AgentDetailCard({ agent }) {
@@ -174,6 +210,10 @@ export default function Agents() {
     { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor network traffic','Detect traffic spikes','Identify port scans','Flag suspicious IPs'], uptime_seconds: 0 },
     { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Analyze login attempts','Detect brute force attacks','Flag abnormal login locations','Analyze system logs'], uptime_seconds: 0 },
     { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Correlate signals from Sentry & Detective','Determine threat severity','Initiate mitigation actions','Generate XAI reasoning paths'], uptime_seconds: 0 },
+    { name: 'Threat Intelligence', role: 'Threat Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor IOC and reputation feeds','Correlate IPs with malicious infrastructure','Track CVE and reputation context','Reduce false positives with external intel'], uptime_seconds: 0 },
+    { name: 'Anomaly Detection', role: 'Behavioral Analytics', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Detect behavioral anomalies','Score suspicious events with ML','Identify unknown attack patterns','Provide anomaly confidence'], uptime_seconds: 0 },
+    { name: 'Response Automation', role: 'Defensive Execution', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Execute containment actions','Block malicious IPs','Trigger notifications','Track execution outcomes'], uptime_seconds: 0 },
+    { name: 'Forensics', role: 'Incident Investigation', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Reconstruct attack timelines','Summarize incident evidence','Generate forensic notes','Support future tuning'], uptime_seconds: 0 },
   ]
 
   const displayAgents = agents.length > 0 ? agents : defaultAgents

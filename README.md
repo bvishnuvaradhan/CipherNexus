@@ -44,13 +44,17 @@ A full-stack, production-grade **Security Operations Center (SOC)** dashboard po
 └─────────────────────────────────────────────────────────┘
 ```
 
-### The Three Agents
+### The Seven Agents
 
 | Agent | Role | Detection |
 | --- | --- | --- |
 | **Sentry** | Network Defense | Traffic spikes, port scans, suspicious IPs |
 | **Detective** | Log Intelligence | Brute force, suspicious logins, data exfiltration |
 | **Commander** | Decision Engine | Cross-agent correlation → XAI response |
+| **Threat Intelligence** | IOC Correlation | Known malicious IPs, reputation, external threat context |
+| **Anomaly Detection** | Behavioral Analytics | ML anomaly scoring, unusual behavior, zero-day-like patterns |
+| **Response Automation** | Defensive Execution | Blocks, enforcement actions, automated execution tracking |
+| **Forensics** | Incident Investigation | Timelines, evidence summaries, post-incident context |
 
 ### A2A Communication Protocol (JSON)
 
