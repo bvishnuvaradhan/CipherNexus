@@ -230,8 +230,20 @@ export default function Agents() {
         <div className="flex justify-center py-12"><Spinner size="lg" /></div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {displayAgents.map(a => <AgentDetailCard key={a.name} agent={a} />)}
+          <div className="cyber-card p-3">
+            <div className="flex items-center justify-between mb-3 px-1">
+              <p className="font-mono text-xs font-semibold text-slate-500 uppercase tracking-wider">Agent Operations</p>
+              <p className="font-mono text-[11px] text-slate-600">Scroll horizontally</p>
+            </div>
+            <div className="overflow-x-auto pb-2">
+              <div className="flex gap-4 min-w-max">
+                {displayAgents.map(a => (
+                  <div key={a.name} className="w-[360px] shrink-0">
+                    <AgentDetailCard agent={a} />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
           <A2AProtocolDiagram />
