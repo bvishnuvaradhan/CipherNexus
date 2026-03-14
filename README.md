@@ -258,7 +258,7 @@ ws://localhost:8000/ws/alerts
 
 ### Backend
 ```env
-MONGO_URL=mongodb://localhost:27017
+MONGO_URL=mongodb+srv://2410030142_db_user:<db_password>@cluster0.8kzwvmp.mongodb.net/?appName=Cluster0
 DB_NAME=cyber_defense
 ```
 
