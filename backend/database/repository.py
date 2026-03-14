@@ -77,6 +77,11 @@ async def fetch_one(collection: str, query: Dict, sort_field: Optional[str] = No
     return _serialize_doc(doc) if doc else None
 
 
+async def upsert_document(collection: str, query: Dict, update: Dict) -> None:
+    col = _col(collection)
+    await col.update_one(query, update, upsert=True)
+
+
 async def clear_collections(collections: Optional[List[str]] = None) -> Dict[str, int]:
     """Delete all documents from selected collections."""
     names = collections or ["alerts", "logs", "agent_messages", "responses", "attacks"]
@@ -327,11 +332,14 @@ async def resolve_blocked_responses_for_alert(alert_id: str, details: Optional[D
 
 
 async def get_threat_level() -> Dict[str, Any]:
-    """Compute overall threat level from active alerts."""
-    critical = await count_documents("alerts", {"severity": "critical", "status": "active"})
-    high = await count_documents("alerts", {"severity": "high", "status": "active"})
-    medium = await count_documents("alerts", {"severity": "medium", "status": "active"})
-    total_active = await count_documents("alerts", {"status": "active"})
+    """Compute overall threat level from unresolved alerts."""
+    unresolved_statuses = ["active", "investigating", "blocked", "monitoring"]
+    unresolved_query = {"status": {"$in": unresolved_statuses}}
+
+    critical = await count_documents("alerts", {**unresolved_query, "severity": "critical"})
+    high = await count_documents("alerts", {**unresolved_query, "severity": "high"})
+    medium = await count_documents("alerts", {**unresolved_query, "severity": "medium"})
+    total_active = await count_documents("alerts", unresolved_query)
 
     score = min(100, critical * 25 + high * 10 + medium * 4)
 
@@ -371,25 +379,87 @@ async def _avg_and_count_numeric(collection: str, match: Dict[str, Any], field: 
 
 async def get_agent_activity_metrics(agent_name: str) -> Dict[str, Any]:
     """Compute persisted activity metrics for an agent from MongoDB."""
-    alerts_count = await count_documents("alerts", {"agent": agent_name})
-    responses_count = await count_documents("responses", {"agent": agent_name})
-    messages_count = await count_documents("agent_messages", {"from_agent": agent_name})
+    unresolved_alert_statuses = ["active", "investigating", "blocked", "monitoring"]
+    unresolved_response_statuses = ["blocked", "monitoring"]
+
+    current_alerts_count = await count_documents(
+        "alerts",
+        {"agent": agent_name, "status": {"$in": unresolved_alert_statuses}},
+    )
+    current_responses_count = await count_documents(
+        "responses",
+        {"agent": agent_name, "status": {"$in": unresolved_response_statuses}},
+    )
+
+    total_alerts_count = await count_documents("alerts", {"agent": agent_name})
+    total_responses_count = await count_documents("responses", {"agent": agent_name})
 
     alert_avg, alert_n = await _avg_and_count_numeric("alerts", {"agent": agent_name}, "confidence")
     response_avg, response_n = await _avg_and_count_numeric("responses", {"agent": agent_name}, "confidence")
-    msg_avg, msg_n = await _avg_and_count_numeric("agent_messages", {"from_agent": agent_name}, "payload.confidence")
 
-    total_n = alert_n + response_n + msg_n
+    runtime_metric = await fetch_one("agent_runtime_metrics", {"name": agent_name}) or {}
+
+    total_n = alert_n + response_n
     if total_n > 0:
         weighted_avg = (
             (alert_avg * alert_n)
             + (response_avg * response_n)
-            + (msg_avg * msg_n)
         ) / total_n
     else:
         weighted_avg = 0.0
 
+    current_threat_count = int(current_alerts_count + current_responses_count)
+    historical_total = int(total_alerts_count + total_responses_count)
+    runtime_total = int(runtime_metric.get("total_threats_detected", runtime_metric.get("threat_count", 0)) or 0)
+    confidence_avg = max(
+        round(float(weighted_avg), 3),
+        round(float(runtime_metric.get("confidence_avg", 0.0) or 0.0), 3),
+    )
+
     return {
-        "threat_count": int(alerts_count + responses_count + messages_count),
-        "confidence_avg": round(float(weighted_avg), 3),
+        "threat_count": current_threat_count,
+        "total_threats_detected": max(current_threat_count, historical_total, runtime_total),
+        "confidence_avg": confidence_avg,
+        "uptime_seconds": int(runtime_metric.get("uptime_seconds", 0) or 0),
+        "last_action": runtime_metric.get("last_action"),
+        "last_action_time": runtime_metric.get("last_action_time"),
     }
+
+
+async def persist_agent_runtime_metrics(status: Dict[str, Any]) -> None:
+    """Persist monotonic agent runtime metrics so agent cards survive process and page reloads."""
+    name = status.get("name")
+    if not name:
+        return
+
+    existing = await fetch_one("agent_runtime_metrics", {"name": name}) or {}
+
+    payload = {
+        "name": name,
+        "role": status.get("role"),
+        "responsibilities": status.get("responsibilities", []),
+        "status": status.get("status", existing.get("status", "offline")),
+        "threat_count": max(int(existing.get("threat_count", 0) or 0), int(status.get("threat_count", 0) or 0)),
+        "total_threats_detected": max(
+            int(existing.get("total_threats_detected", 0) or 0),
+            int(existing.get("threat_count", 0) or 0),
+            int(status.get("threat_count", 0) or 0),
+        ),
+        "confidence_avg": max(
+            float(existing.get("confidence_avg", 0.0) or 0.0),
+            float(status.get("confidence_avg", 0.0) or 0.0),
+        ),
+        "uptime_seconds": max(
+            int(existing.get("uptime_seconds", 0) or 0),
+            int(status.get("uptime_seconds", 0) or 0),
+        ),
+        "last_action": status.get("last_action") or existing.get("last_action"),
+        "last_action_time": status.get("last_action_time") or existing.get("last_action_time"),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+    await upsert_document(
+        "agent_runtime_metrics",
+        {"name": name},
+        {"$set": payload},
+    )

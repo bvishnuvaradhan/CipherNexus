@@ -7,9 +7,18 @@ from fastapi import APIRouter, Request
 from models.schemas import SimulateAttackRequest, AttackType
 from database.repository import save_attack, save_alert
 from websocket.manager import manager as ws_manager
-from ml.predictor import predict_anomaly
+from agents.anomaly_detection import evaluate_flow
 
 router = APIRouter()
+
+
+IOC_SOURCE_IPS = {
+    AttackType.BRUTE_FORCE.value: ["205.174.165.73", "185.220.101.15"],
+    AttackType.DATA_EXFILTRATION.value: ["185.220.101.15"],
+    AttackType.DDOS.value: ["205.174.165.69", "205.174.165.70", "205.174.165.71"],
+    AttackType.COMMAND_CONTROL.value: ["185.220.101.15", "205.174.165.73"],
+    AttackType.RANSOMWARE.value: ["185.220.101.15"],
+}
 
 
 def _severity_from_score(score: float) -> str:
@@ -28,23 +37,74 @@ def _build_flow_features(attack_type: str, intensity: str, attack: dict) -> dict
 
     base = {
         "Destination Port": 80,
-        "Flow Duration": int(1200 * scale),
-        "Total Fwd Packets": int(12 * scale),
-        "Total Backward Packets": int(8 * scale),
-        "Flow Bytes/s": int(25000 * scale),
-        "Flow Packets/s": round(16 * scale, 2),
+        "Flow Duration": int(1600 * scale),
+        "Total Fwd Packets": int(24 * scale),
+        "Total Backward Packets": int(10 * scale),
+        "Flow Bytes/s": int(60000 * scale),
+        "Flow Packets/s": round(28 * scale, 2),
     }
 
     if attack_type == AttackType.PORT_SCAN.value:
-        base.update({"Destination Port": 22, "Flow Packets/s": round(35 * scale, 2)})
+        base.update({
+            "Destination Port": 22,
+            "Flow Duration": int(400 * scale),
+            "Total Fwd Packets": int(240 * scale),
+            "Total Backward Packets": max(2, int(4 * scale)),
+            "Flow Bytes/s": int(180000 * scale),
+            "Flow Packets/s": round(420 * scale, 2),
+        })
     elif attack_type == AttackType.BRUTE_FORCE.value:
-        base.update({"Destination Port": 22, "Flow Duration": int(2000 * scale)})
+        base.update({
+            "Destination Port": 22,
+            "Flow Duration": int(9500 * scale),
+            "Total Fwd Packets": int(120 * scale),
+            "Total Backward Packets": int(16 * scale),
+            "Flow Bytes/s": int(125000 * scale),
+            "Flow Packets/s": round(170 * scale, 2),
+        })
     elif attack_type == AttackType.DATA_EXFILTRATION.value:
-        base.update({"Destination Port": 443, "Flow Bytes/s": int(85000 * scale)})
+        base.update({
+            "Destination Port": 443,
+            "Flow Duration": int(14000 * scale),
+            "Total Fwd Packets": int(260 * scale),
+            "Total Backward Packets": int(12 * scale),
+            "Flow Bytes/s": int(420000 * scale),
+            "Flow Packets/s": round(150 * scale, 2),
+        })
     elif attack_type == AttackType.TRAFFIC_SPIKE.value:
-        base.update({"Flow Packets/s": round(55 * scale, 2), "Total Fwd Packets": int(25 * scale)})
+        base.update({
+            "Flow Duration": int(600 * scale),
+            "Total Fwd Packets": int(420 * scale),
+            "Total Backward Packets": int(28 * scale),
+            "Flow Bytes/s": int(260000 * scale),
+            "Flow Packets/s": round(1400 * scale, 2),
+        })
     elif attack_type == AttackType.SUSPICIOUS_LOGIN.value:
-        base.update({"Destination Port": 3389, "Flow Duration": int(1600 * scale)})
+        base.update({
+            "Destination Port": 3389,
+            "Flow Duration": int(6500 * scale),
+            "Total Fwd Packets": int(90 * scale),
+            "Total Backward Packets": int(22 * scale),
+            "Flow Bytes/s": int(90000 * scale),
+            "Flow Packets/s": round(120 * scale, 2),
+        })
+    elif attack_type == AttackType.DDOS.value:
+        base.update({
+            "Flow Duration": int(300 * scale),
+            "Total Fwd Packets": int(1600 * scale),
+            "Total Backward Packets": int(36 * scale),
+            "Flow Bytes/s": int(900000 * scale),
+            "Flow Packets/s": round(6200 * scale, 2),
+        })
+    elif attack_type == AttackType.COMMAND_CONTROL.value:
+        base.update({
+            "Destination Port": 443,
+            "Flow Duration": int(26000 * scale),
+            "Total Fwd Packets": int(180 * scale),
+            "Total Backward Packets": int(18 * scale),
+            "Flow Bytes/s": int(320000 * scale),
+            "Flow Packets/s": round(150 * scale, 2),
+        })
 
     if attack.get("target"):
         base["Fwd Header Length"] = 20
@@ -76,10 +136,21 @@ ATTACK_LABELS = {
 }
 
 
+def _select_source_ip(attack_type: str, requested_ip: str | None) -> str:
+    if requested_ip:
+        return requested_ip
+
+    preferred_pool = IOC_SOURCE_IPS.get(attack_type)
+    if preferred_pool:
+        return random.choice(preferred_pool)
+
+    return random.choice(IP_POOL)
+
+
 @router.post("")
 async def simulate_attack(payload: SimulateAttackRequest, request: Request):
     orchestrator = request.app.state.orchestrator
-    source_ip = payload.source_ip or random.choice(IP_POOL)
+    source_ip = _select_source_ip(payload.attack_type.value, payload.source_ip)
     target = payload.target_ip or "192.168.0.1"
 
     # Build parameter map from payload
@@ -139,6 +210,7 @@ async def simulate_attack(payload: SimulateAttackRequest, request: Request):
         "detected": True,
         "mitigated": False,
     }
+    flow_features = _build_flow_features(payload.attack_type.value, payload.intensity or "medium", attack)
     await save_attack(attack)
 
     # Broadcast to WS clients
@@ -155,13 +227,13 @@ async def simulate_attack(payload: SimulateAttackRequest, request: Request):
         payload.intensity or "medium",
         target=target,
         params=params,
+        context={"flow_features": flow_features},
     )
 
     ml_result = None
     ml_alert = None
     try:
-        flow_features = _build_flow_features(payload.attack_type.value, payload.intensity or "medium", attack)
-        ml_result = predict_anomaly(flow_features)
+        ml_result = evaluate_flow(flow_features, event=payload.attack_type.value)
         if ml_result.get("anomaly"):
             score = float(ml_result.get("score", 0.0))
             ml_alert = {

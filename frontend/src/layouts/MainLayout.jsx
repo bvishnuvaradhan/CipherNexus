@@ -44,15 +44,23 @@ export default function MainLayout() {
     alertsAPI.threatLevel().then(r => setThreatLevel(r.data)).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    if (location.pathname.startsWith('/alerts')) {
+      setLiveAlerts(0)
+    }
+  }, [location.pathname])
+
   const handleWsMessage = useCallback((msg) => {
     setWsConnected(true)
     if (msg.type === 'threat_level') {
       setThreatLevel(msg.data)
     }
     if (msg.type === 'alert') {
-      setLiveAlerts(p => p + 1)
+      if (!location.pathname.startsWith('/alerts')) {
+        setLiveAlerts(p => p + 1)
+      }
     }
-  }, [])
+  }, [location.pathname])
 
   useWebSocket(handleWsMessage)
 

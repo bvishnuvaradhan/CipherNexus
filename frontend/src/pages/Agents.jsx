@@ -72,23 +72,55 @@ const AGENT_META = {
 }
 
 const DEFAULT_AGENTS = [
-  { name: 'Sentry', role: 'Network Defense', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor network traffic','Detect traffic spikes','Identify port scans','Flag suspicious IPs'], uptime_seconds: 0 },
-  { name: 'Detective', role: 'Log Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Analyze login attempts','Detect brute force attacks','Flag abnormal login locations','Analyze system logs'], uptime_seconds: 0 },
-  { name: 'Commander', role: 'Decision Engine', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Correlate signals from Sentry & Detective','Determine threat severity','Initiate mitigation actions','Generate XAI reasoning paths'], uptime_seconds: 0 },
-  { name: 'Threat Intelligence', role: 'Threat Intelligence', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Monitor IOC and reputation feeds','Correlate IPs with malicious infrastructure','Track CVE and reputation context','Reduce false positives with external intel'], uptime_seconds: 0 },
-  { name: 'Anomaly Detection', role: 'Behavioral Analytics', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Detect behavioral anomalies','Score suspicious events with ML','Identify unknown attack patterns','Provide anomaly confidence'], uptime_seconds: 0 },
-  { name: 'Response Automation', role: 'Defensive Execution', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Execute containment actions','Block malicious IPs','Trigger notifications','Track execution outcomes'], uptime_seconds: 0 },
-  { name: 'Forensics', role: 'Incident Investigation', status: 'online', threat_count: 0, confidence_avg: 0, responsibilities: ['Reconstruct attack timelines','Summarize incident evidence','Generate forensic notes','Support future tuning'], uptime_seconds: 0 },
+  { name: 'Sentry', role: 'Network Defense', status: 'offline', threat_count: 0, total_threats_detected: 0, confidence_avg: 0, responsibilities: ['Monitor network traffic','Detect traffic spikes','Identify port scans','Flag suspicious IPs'], uptime_seconds: 0, has_live_status: false },
+  { name: 'Detective', role: 'Log Intelligence', status: 'offline', threat_count: 0, total_threats_detected: 0, confidence_avg: 0, responsibilities: ['Analyze login attempts','Detect brute force attacks','Flag abnormal login locations','Analyze system logs'], uptime_seconds: 0, has_live_status: false },
+  { name: 'Commander', role: 'Decision Engine', status: 'offline', threat_count: 0, total_threats_detected: 0, confidence_avg: 0, responsibilities: ['Correlate signals from Sentry & Detective','Determine threat severity','Initiate mitigation actions','Generate XAI reasoning paths'], uptime_seconds: 0, has_live_status: false },
+  { name: 'Threat Intelligence', role: 'Threat Intelligence', status: 'offline', threat_count: 0, total_threats_detected: 0, confidence_avg: 0, responsibilities: ['Monitor IOC and reputation feeds','Correlate IPs with malicious infrastructure','Track CVE and reputation context','Reduce false positives with external intel'], uptime_seconds: 0, has_live_status: false },
+  { name: 'Anomaly Detection', role: 'Behavioral Analytics', status: 'offline', threat_count: 0, total_threats_detected: 0, confidence_avg: 0, responsibilities: ['Detect behavioral anomalies','Score suspicious events with ML','Identify unknown attack patterns','Provide anomaly confidence'], uptime_seconds: 0, has_live_status: false },
+  { name: 'Response Automation', role: 'Defensive Execution', status: 'offline', threat_count: 0, total_threats_detected: 0, confidence_avg: 0, responsibilities: ['Execute containment actions','Block malicious IPs','Trigger notifications','Track execution outcomes'], uptime_seconds: 0, has_live_status: false },
+  { name: 'Forensics', role: 'Incident Investigation', status: 'offline', threat_count: 0, total_threats_detected: 0, confidence_avg: 0, responsibilities: ['Reconstruct attack timelines','Summarize incident evidence','Generate forensic notes','Support future tuning'], uptime_seconds: 0, has_live_status: false },
 ]
 
-function mergeAgentsWithDefaults(liveAgents = []) {
+function mergeAgentsWithDefaults(liveAgents = [], prevAgents = []) {
   const byName = new Map((liveAgents || []).map((a) => [a.name, a]))
+  const prevByName = new Map((prevAgents || []).map((a) => [a.name, a]))
   const receivedAtMs = Date.now()
-  return DEFAULT_AGENTS.map((base) => ({
-    ...base,
-    ...(byName.get(base.name) || {}),
-    _receivedAtMs: receivedAtMs,
-  }))
+
+  return DEFAULT_AGENTS.map((base) => {
+    const prev = prevByName.get(base.name) || {}
+    const live = byName.get(base.name) || {}
+    const hasLive = byName.has(base.name)
+
+    const threatCount = hasLive
+      ? Number(live.threat_count ?? prev.threat_count ?? base.threat_count ?? 0)
+      : Number(prev.threat_count ?? base.threat_count ?? 0)
+    const totalThreatsDetected = Math.max(
+      Number(base.total_threats_detected || 0),
+      Number(prev.total_threats_detected || 0),
+      Number(live.total_threats_detected ?? live.threat_count ?? 0)
+    )
+    const confidenceAvg = Math.max(
+      Number(base.confidence_avg || 0),
+      Number(prev.confidence_avg || 0),
+      Number(live.confidence_avg || 0)
+    )
+    const uptimeSeconds = Math.max(
+      Number(base.uptime_seconds || 0),
+      Number(prev.uptime_seconds || 0),
+      Number(live.uptime_seconds || 0)
+    )
+
+    return {
+      ...base,
+      ...prev,
+      ...live,
+      threat_count: threatCount,
+      total_threats_detected: totalThreatsDetected,
+      confidence_avg: confidenceAvg,
+      uptime_seconds: uptimeSeconds,
+      _receivedAtMs: hasLive ? receivedAtMs : Number(prev._receivedAtMs || receivedAtMs),
+    }
+  })
 }
 
 function AgentDetailCard({ agent, nowMs }) {
@@ -97,7 +129,8 @@ function AgentDetailCard({ agent, nowMs }) {
   const baseUptime = Number(agent.uptime_seconds || 0)
   const receivedAtMs = Number(agent._receivedAtMs || nowMs)
   const elapsedSeconds = Math.max(0, Math.floor((nowMs - receivedAtMs) / 1000))
-  const uptimeSeconds = baseUptime + elapsedSeconds
+  const isActiveRuntime = Boolean(agent.has_live_status) || agent.status === 'online' || agent.status === 'busy'
+  const uptimeSeconds = isActiveRuntime ? baseUptime + elapsedSeconds : baseUptime
   const uptimeLabel = uptimeSeconds < 60 ? `${uptimeSeconds}s` : `${Math.floor(uptimeSeconds / 60)}m`
 
   return (
@@ -132,7 +165,7 @@ function AgentDetailCard({ agent, nowMs }) {
       <div className="grid grid-cols-2 gap-4 p-5">
         <div>
           <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-1">Threats Detected</p>
-          <p className={`font-display font-bold text-2xl ${meta.textColor}`}>{agent.threat_count || 0}</p>
+          <p className={`font-display font-bold text-2xl ${meta.textColor}`}>{agent.total_threats_detected || agent.threat_count || 0}</p>
         </div>
         <div>
           <p className="text-[11px] font-mono text-slate-600 uppercase tracking-wider mb-1">Uptime</p>
@@ -205,7 +238,7 @@ function A2AProtocolDiagram() {
 }
 
 export default function Agents() {
-  const [agents, setAgents] = useState(() => mergeAgentsWithDefaults())
+  const [agents, setAgents] = useState(() => mergeAgentsWithDefaults([], []))
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [nowMs, setNowMs] = useState(Date.now())
@@ -216,7 +249,9 @@ export default function Agents() {
         agentsAPI.list(),
         logsAPI.agentMessages(30),
       ])
-      if (ag.status === 'fulfilled') setAgents(mergeAgentsWithDefaults(ag.value.data.agents || []))
+      if (ag.status === 'fulfilled') {
+        setAgents((prev) => mergeAgentsWithDefaults(ag.value.data.agents || [], prev))
+      }
       if (msgs.status === 'fulfilled') setMessages(msgs.value.data.messages || [])
     } finally { setLoading(false) }
   }, [])
@@ -229,7 +264,9 @@ export default function Agents() {
   }, [])
 
   const handleWs = useCallback((msg) => {
-    if (msg.type === 'status') setAgents(mergeAgentsWithDefaults(msg.data.agents || []))
+    if (msg.type === 'status') {
+      setAgents((prev) => mergeAgentsWithDefaults(msg.data.agents || [], prev))
+    }
     if (msg.type === 'agent_message') setMessages(p => [...p, msg.data].slice(-30))
   }, [])
   useWebSocket(handleWs)

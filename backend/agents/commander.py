@@ -24,6 +24,7 @@ from database.repository import (
     mark_attacks_mitigated,
     fetch_one,
     resolve_monitoring_responses_for_alert,
+    resolve_blocked_responses_for_alert,
 )
 
 
@@ -128,6 +129,27 @@ class CommanderAgent:
         intel_result = details.get("threat_intelligence") or None
         anomaly_result = details.get("anomaly_detection") or None
 
+        if intel_result is None and self._threat_intelligence:
+            try:
+                intel_result = self._threat_intelligence.assess_ip(ip)
+            except Exception:
+                intel_result = None
+
+        if anomaly_result is None and self._anomaly_detection:
+            try:
+                flow_features = details.get("flow_features") or {}
+                anomaly_features = {
+                    "Destination Port": int(flow_features.get("Destination Port", details.get("destination_port", 80))),
+                    "Flow Duration": int(flow_features.get("Flow Duration", details.get("flow_duration", 2000))),
+                    "Total Fwd Packets": int(flow_features.get("Total Fwd Packets", details.get("total_fwd_packets", 20))),
+                    "Total Backward Packets": int(flow_features.get("Total Backward Packets", details.get("total_backward_packets", 12))),
+                    "Flow Bytes/s": int(flow_features.get("Flow Bytes/s", details.get("flow_bytes_per_sec", 60000))),
+                    "Flow Packets/s": float(flow_features.get("Flow Packets/s", details.get("flow_packets_per_sec", 35.0))),
+                }
+                anomaly_result = self._anomaly_detection.analyze_flow(anomaly_features, event=threat_type)
+            except Exception:
+                anomaly_result = None
+
         # Step 2 — build XAI reasoning
         reasoning, confidence = self._build_reasoning(
             alert, verification, detective_confirms, intel_result, anomaly_result
@@ -197,6 +219,7 @@ class CommanderAgent:
         response_status = str(response.get("status", "")).lower()
 
         if response_status == ResponseStatus.MONITORING.value:
+            auto_resolve_seconds = self.MONITORING_AUTO_RESOLVE_SECONDS
             await self._set_alert_lifecycle(
                 alert_id,
                 "investigating",
@@ -205,12 +228,17 @@ class CommanderAgent:
                     "updated_by": self.NAME.value,
                     "reason": "Containment confidence not high enough for immediate block",
                     "target": target,
-                    "auto_resolve_seconds": self.MONITORING_AUTO_RESOLVE_SECONDS,
+                    "auto_resolve_seconds": auto_resolve_seconds,
                 },
             )
+            asyncio.create_task(self._auto_resolve_monitoring_alert(alert_id, target, auto_resolve_seconds))
             return
 
         if response_status == ResponseStatus.BLOCKED.value and execution_status in ("executed", "already_enforced"):
+            auto_unblock_seconds = max(
+                int(os.getenv("BLOCK_AUTO_UNBLOCK_SECONDS", "30")),
+                self.MIN_RESOLUTION_SECONDS,
+            )
             mitigated_count = await mark_attacks_mitigated(
                 target,
                 {
@@ -228,12 +256,10 @@ class CommanderAgent:
                     "execution_status": execution_status,
                     "target": target,
                     "mitigated_attacks": mitigated_count,
-                    "auto_unblock_seconds": max(
-                        int(os.getenv("BLOCK_AUTO_UNBLOCK_SECONDS", "60")),
-                        self.MIN_RESOLUTION_SECONDS,
-                    ),
+                    "auto_unblock_seconds": auto_unblock_seconds,
                 },
             )
+            asyncio.create_task(self._auto_resolve_blocked_alert(alert_id, target, auto_unblock_seconds))
             return
 
     async def _auto_resolve_monitoring_alert(self, alert_id: str, target: str, delay_seconds: int) -> None:
@@ -284,6 +310,69 @@ class CommanderAgent:
                 "updated_by": self.NAME.value,
                 "resolved_at": datetime.utcnow().isoformat(),
                 "resolution": "Monitoring window elapsed without escalation",
+                "target": target,
+            },
+        )
+
+    async def _auto_resolve_blocked_alert(self, alert_id: str, target: str, delay_seconds: int) -> None:
+        await asyncio.sleep(delay_seconds)
+
+        latest_alert = await fetch_one("alerts", {"id": alert_id})
+        if not latest_alert:
+            return
+
+        latest_status = str(latest_alert.get("status", "")).lower()
+        if latest_status == "resolved":
+            return
+
+        await self._set_alert_lifecycle(
+            alert_id,
+            "investigating",
+            {
+                "phase": "resolving",
+                "updated_by": self.NAME.value,
+                "reason": "Block hold window elapsed; validating containment before closure",
+                "target": target,
+            },
+        )
+
+        updated_count = await resolve_blocked_responses_for_alert(
+            alert_id,
+            {
+                "updated_by": self.NAME.value,
+                "reason": "Block hold window elapsed",
+            },
+        )
+
+        resolution_response = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.utcnow().isoformat(),
+            "action": f"Auto-resolve blocked incident for IP {target}",
+            "target": target,
+            "agent": self.NAME.value,
+            "confidence": 0.7,
+            "reasoning": f"Block maintained for {delay_seconds}s without relapse. Incident moved to resolution.",
+            "status": ResponseStatus.RESOLVED.value,
+            "related_alert_id": alert_id,
+            "signals": [
+                f"[Commander] Block hold timer elapsed ({delay_seconds}s)",
+                f"[Commander] Converted blocked responses to resolved: {updated_count}",
+                "[Commander] No renewed malicious activity observed",
+                "[Commander] Incident transitioned from blocked to resolving then resolved",
+            ],
+        }
+        await save_response(resolution_response)
+        if self._ws_manager:
+            await self._ws_manager.broadcast_response(resolution_response)
+
+        await self._set_alert_lifecycle(
+            alert_id,
+            "resolved",
+            {
+                "phase": "resolved",
+                "updated_by": self.NAME.value,
+                "resolved_at": datetime.utcnow().isoformat(),
+                "resolution": "Blocked hold window elapsed without relapse",
                 "target": target,
             },
         )
@@ -450,6 +539,19 @@ class CommanderAgent:
         self, severity: SeverityLevel, confidence: float, ip: str, threat_type: str
     ) -> tuple[str, ResponseStatus]:
         """Map severity + confidence onto a concrete response action."""
+        if threat_type == AttackType.DATA_EXFILTRATION.value:
+            self._blocked_ips.add(ip)
+            return f"Block IP {ip}", ResponseStatus.BLOCKED
+
+        if threat_type == AttackType.PORT_SCAN.value:
+            return f"Monitor IP {ip} — reconnaissance watch", ResponseStatus.MONITORING
+
+        if threat_type == AttackType.BRUTE_FORCE.value:
+            if confidence >= 0.95 and severity == SeverityLevel.CRITICAL:
+                self._blocked_ips.add(ip)
+                return f"Block IP {ip}", ResponseStatus.BLOCKED
+            return f"Monitor IP {ip} — brute-force watch", ResponseStatus.MONITORING
+
         if confidence >= 0.85 and severity in (SeverityLevel.HIGH, SeverityLevel.CRITICAL):
             self._blocked_ips.add(ip)
             return f"Block IP {ip}", ResponseStatus.BLOCKED

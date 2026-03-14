@@ -69,6 +69,7 @@ export const alertsAPI = {
 export const logsAPI = {
   list:          (limit = 100) => api.get('/logs', { params: { limit } }),
   agentMessages: (limit = 50)  => api.get('/logs/agent-messages', { params: { limit } }),
+  forAlert:      (alertId, limit = 100) => api.get(`/logs/for-alert/${alertId}`, { params: { limit } }),
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────

@@ -411,6 +411,10 @@ const CATEGORY_COLORS = {
   MALWARE: '#dc2626',
 }
 
+function buildDefaultParams(attack) {
+  return Object.fromEntries((attack.params || []).map((param) => [param.key, param.default ?? '']))
+}
+
 // ── Attack Progress Indicator ────────────────────────────────────────────────
 function AttackProgress({ currentStage, attack, startTime }) {
   const [elapsed, setElapsed] = useState(0)
@@ -795,6 +799,16 @@ export default function HackerConsole() {
   }, [addLog])
   useWebSocket(handleWs)
 
+  const executeAttackRequest = useCallback(async (attackId, params) => {
+    return hackerAPI.launchAttack({
+      attack_type: attackId,
+      source_ip: sourceIp || null,
+      target_ip: targetIp,
+      intensity,
+      ...params,
+    })
+  }, [intensity, sourceIp, targetIp])
+
   const launchAttack = useCallback(async (attackId, params) => {
     const attack = ATTACKS.find(a => a.id === attackId)
     setRunning(attackId)
@@ -826,13 +840,7 @@ export default function HackerConsole() {
       setCurrentStage('execute')
       addLog('error', '[EXECUTE]', `>>> ATTACK VECTOR DEPLOYED <<<`)
 
-      const res = await hackerAPI.launchAttack({
-        attack_type: attackId,
-        source_ip: sourceIp || null,
-        target_ip: targetIp,
-        intensity,
-        ...params,
-      })
+      const res = await executeAttackRequest(attackId, params)
 
       // Stage 5: Detection
       setCurrentStage('detect')
@@ -864,7 +872,57 @@ export default function HackerConsole() {
         setAttackStartTime(null)
       }, 1500)
     }
-  }, [intensity, sourceIp, targetIp, addLog])
+  }, [addLog, executeAttackRequest])
+
+  const launchAllAttacks = useCallback(async () => {
+    setRunning('all_attacks')
+    setCurrentStage(null)
+    setActiveAttack(null)
+    setAttackStartTime(Date.now())
+    setLastResult(null)
+    setLastAttackLabel('All Attacks')
+
+    addLog('warn', '[BATCH]', `Launching all ${ATTACKS.length} attack vectors simultaneously...`)
+    addLog('info', '[CONFIG]', `Intensity: ${intensity.toUpperCase()} | Source: ${sourceIp || 'auto-assigned'} | Target: ${targetIp}`)
+
+    const results = await Promise.allSettled(
+      ATTACKS.map(async (attack) => {
+        addLog('warn', '[QUEUE]', `${attack.label} queued for dispatch`)
+        const res = await executeAttackRequest(attack.id, buildDefaultParams(attack))
+        return { attack, data: res.data }
+      })
+    )
+
+    const successes = results.filter((result) => result.status === 'fulfilled')
+    const failures = results.filter((result) => result.status === 'rejected')
+
+    successes.forEach((result) => {
+      const { attack, data } = result.value
+      const alert = data.agent_result?.alert
+      addLog(
+        'success',
+        '[BATCH-OK]',
+        `${attack.label} launched${alert ? ` — ${alert.event} (${String(alert.severity || '').toUpperCase()})` : ''}`
+      )
+    })
+
+    failures.forEach((result) => {
+      addLog('error', '[BATCH-ERR]', result.reason?.response?.data?.detail || result.reason?.message || 'Attack dispatch failed')
+    })
+
+    addLog('success', '[BATCH]', `Completed batch dispatch: ${successes.length} succeeded, ${failures.length} failed`)
+
+    if (successes.length > 0) {
+      const latest = successes[successes.length - 1].value
+      setLastResult(latest.data)
+      setLastAttackLabel(`${latest.attack.label} (batch result)`)
+    }
+
+    setTimeout(() => {
+      setRunning(null)
+      setAttackStartTime(null)
+    }, 1200)
+  }, [addLog, executeAttackRequest, intensity, sourceIp, targetIp])
 
   const handleLogout = () => {
     hackerLogout()
@@ -989,6 +1047,27 @@ export default function HackerConsole() {
               {categories.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            onClick={launchAllAttacks}
+            disabled={!!running}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-mono text-sm font-bold uppercase tracking-wider transition-all duration-200"
+            style={{
+              background: 'rgba(239,68,68,0.15)',
+              border: '1px solid rgba(239,68,68,0.35)',
+              color: '#ef4444',
+              opacity: running ? 0.4 : 1,
+              cursor: running ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {running === 'all_attacks' ? (
+              <><span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />Launching All...</>
+            ) : (
+              <><Play className="w-3.5 h-3.5" />Launch All Attacks</>
+            )}
+          </button>
         </div>
 
         {/* Attack grid */}

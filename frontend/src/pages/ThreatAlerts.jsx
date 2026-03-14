@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { AlertTriangle, RefreshCw, Bell, ChevronDown, ChevronUp, FileText, Brain, Shield, Clock, Loader } from 'lucide-react'
-import { alertsAPI } from '../services/api'
+import { alertsAPI, logsAPI } from '../services/api'
 import { useWebSocket } from '../services/websocket'
 import { SeverityBadge, StatusBadge, PageHeader, Spinner, EmptyState, Timestamp, StatCard, ConfidenceBar } from '../components/ui'
 
@@ -39,7 +39,7 @@ function AttackTypeBadge({ type }) {
   )
 }
 
-function AlertDetailPanel({ detail, loading, alert }) {
+function AlertDetailPanel({ detail, loading, alert, logs = [] }) {
   if (loading) {
     return (
       <div className="p-8 flex items-center justify-center gap-3 bg-slate-900/50 border-t border-slate-800">
@@ -169,24 +169,50 @@ function AlertDetailPanel({ detail, loading, alert }) {
           </div>
         </div>
       </div>
+
+      <div className="cyber-card p-4">
+        <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-800">
+          <FileText className="w-4 h-4 text-cyan-400" />
+          <span className="font-mono text-xs font-bold text-slate-300 uppercase tracking-wider">Related Logs</span>
+          <span className="ml-auto text-[10px] font-mono text-slate-600">{logs.length} entries</span>
+        </div>
+        {logs.length === 0 ? (
+          <p className="font-mono text-xs text-slate-600">No contextual logs found for this alert</p>
+        ) : (
+          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+            {logs.map((log, i) => (
+              <div key={`${log.id || 'log'}-${i}`} className="rounded border border-slate-800 bg-slate-950/50 px-3 py-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-mono text-[10px] text-slate-600 uppercase">{log.event_type || 'event'}</span>
+                  <span className="ml-auto"><Timestamp value={log.timestamp} /></span>
+                </div>
+                <p className="font-mono text-xs text-slate-300 leading-relaxed">{log.message || '—'}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
 export default function ThreatAlerts() {
+  const PAGE_SIZE = 10
   const [alerts, setAlerts] = useState([])
   const [stats, setStats] = useState({})
   const [loading, setLoading] = useState(true)
   const [severityFilter, setSeverityFilter] = useState('all')
+  const [page, setPage] = useState(1)
   const [newCount, setNewCount] = useState(0)
   const [expandedId, setExpandedId] = useState(null)
   const [alertDetail, setAlertDetail] = useState(null)
+  const [alertLogs, setAlertLogs] = useState([])
   const [detailLoading, setDetailLoading] = useState(false)
 
   const load = useCallback(async () => {
     try {
       const [a, s] = await Promise.allSettled([alertsAPI.list(100), alertsAPI.stats()])
-      if (a.status === 'fulfilled') setAlerts(a.value.data.alerts || [])
+      if (a.status === 'fulfilled') setAlerts((a.value.data.alerts || []).slice(0, 100))
       if (s.status === 'fulfilled') setStats(s.value.data)
     } finally { setLoading(false) }
   }, [])
@@ -206,14 +232,28 @@ export default function ThreatAlerts() {
     if (expandedId === alert.id) {
       setExpandedId(null)
       setAlertDetail(null)
+      setAlertLogs([])
       return
     }
     setExpandedId(alert.id)
     setDetailLoading(true)
     setAlertDetail(null)
+    setAlertLogs([])
     try {
-      const res = await alertsAPI.detail(alert.id)
-      setAlertDetail(res.data)
+      const [detailRes, logsRes] = await Promise.allSettled([
+        alertsAPI.detail(alert.id),
+        logsAPI.forAlert(alert.id, 100),
+      ])
+
+      if (detailRes.status === 'fulfilled') {
+        setAlertDetail(detailRes.value.data)
+      } else {
+        setAlertDetail({ alert, commander_response: null, recommendations: [] })
+      }
+
+      if (logsRes.status === 'fulfilled') {
+        setAlertLogs(logsRes.value.data.logs || [])
+      }
     } catch {
       setAlertDetail({ alert, commander_response: null, recommendations: [] })
     } finally {
@@ -224,6 +264,20 @@ export default function ThreatAlerts() {
   const filtered = severityFilter === 'all'
     ? alerts
     : alerts.filter(a => a.severity === severityFilter)
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pagedAlerts = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+
+  useEffect(() => {
+    setPage(1)
+  }, [severityFilter])
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [page, totalPages])
 
   return (
     <div className="p-4 lg:p-6 space-y-5 animate-fade-in">
@@ -256,7 +310,12 @@ export default function ThreatAlerts() {
         {['all','critical','high','medium','low'].map(s => (
           <button
             key={s}
-            onClick={() => setSeverityFilter(s)}
+            onClick={() => {
+              setSeverityFilter(s)
+              setExpandedId(null)
+              setAlertDetail(null)
+              setAlertLogs([])
+            }}
             className={`px-4 py-1.5 rounded border text-[11px] font-mono font-semibold uppercase transition-all ${
               severityFilter === s
                 ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-400'
@@ -285,16 +344,14 @@ export default function ThreatAlerts() {
                   <th>Event</th>
                   <th>Source IP</th>
                   <th>Severity</th>
-                  <th>Agent</th>
                   <th>Status</th>
                   <th>Confidence</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((a, i) => (
-                  <>
+                {pagedAlerts.map((a, i) => (
+                  <React.Fragment key={`${a.id || 'alert'}-${i}`}>
                     <tr
-                      key={a.id || i}
                       className="animate-fade-in cursor-pointer hover:bg-slate-800/40 transition-colors"
                       onClick={() => handleRowClick(a)}
                     >
@@ -314,13 +371,6 @@ export default function ThreatAlerts() {
                         <span className="font-mono text-cyan-400/80 text-xs">{a.source_ip || '—'}</span>
                       </td>
                       <td><SeverityBadge level={a.severity} /></td>
-                      <td>
-                        <span className={`font-mono text-xs font-semibold ${
-                          a.agent === 'Sentry' ? 'text-cyan-400' :
-                          a.agent === 'Detective' ? 'text-purple-400' :
-                          'text-yellow-400'
-                        }`}>{a.agent}</span>
-                      </td>
                       <td><StatusBadge status={a.status} /></td>
                       <td>
                         <div className="flex items-center gap-2">
@@ -340,13 +390,13 @@ export default function ThreatAlerts() {
                       </td>
                     </tr>
                     {expandedId === a.id && (
-                      <tr key={`${a.id}-detail`}>
-                        <td colSpan={9} className="p-0">
-                          <AlertDetailPanel detail={alertDetail} loading={detailLoading} alert={a} />
+                      <tr key={`${a.id || 'alert'}-${i}-detail`}>
+                        <td colSpan={8} className="p-0">
+                          <AlertDetailPanel detail={alertDetail} loading={detailLoading} alert={a} logs={alertLogs} />
                         </td>
                       </tr>
                     )}
-                  </>
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -354,8 +404,32 @@ export default function ThreatAlerts() {
         )}
       </div>
 
+      {filtered.length > 0 && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[11px] font-mono text-slate-700">
+            Page {currentPage} of {totalPages}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 rounded border border-slate-700 text-[11px] font-mono text-slate-400 disabled:opacity-40 disabled:cursor-not-allowed hover:text-slate-200"
+            >
+              Prev
+            </button>
+            <button
+              onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-1.5 rounded border border-slate-700 text-[11px] font-mono text-slate-400 disabled:opacity-40 disabled:cursor-not-allowed hover:text-slate-200"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
       <p className="text-[11px] font-mono text-slate-700 text-right">
-        Showing {filtered.length} of {alerts.length} alerts • Click a row to view detailed analysis
+        Showing {pagedAlerts.length} of {filtered.length} alerts on this page • {alerts.length} total loaded • Click a row to view detailed analysis
       </p>
     </div>
   )

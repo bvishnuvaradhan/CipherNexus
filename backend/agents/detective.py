@@ -48,6 +48,7 @@ class DetectiveAgent:
         self.confidence_scores: List[float] = []
         self._message_bus = None
         self._failed_attempts: Dict[str, List[datetime]] = defaultdict(list)
+        self._active_bruteforce_ips: set[str] = set()
         self._ws_manager = None
         self.start_time = datetime.utcnow()
 
@@ -66,6 +67,8 @@ class DetectiveAgent:
         now = datetime.utcnow()
         window_start = now - timedelta(seconds=self.BRUTE_FORCE_WINDOW)
         self._failed_attempts[ip] = [t for t in self._failed_attempts[ip] if t > window_start]
+        if len(self._failed_attempts[ip]) < self.BRUTE_FORCE_THRESHOLD:
+            self._active_bruteforce_ips.discard(ip)
         self._failed_attempts[ip].append(now)
 
         await self._log_event(
@@ -76,6 +79,9 @@ class DetectiveAgent:
 
         attempt_count = len(self._failed_attempts[ip])
         if attempt_count >= self.BRUTE_FORCE_THRESHOLD:
+            if ip in self._active_bruteforce_ips:
+                return None
+
             confidence = min(0.99, 0.70 + (attempt_count * 0.02))
             severity = SeverityLevel.CRITICAL if attempt_count > 20 else SeverityLevel.HIGH
 
@@ -100,6 +106,7 @@ class DetectiveAgent:
                 },
             }
             await save_alert(alert)
+            self._active_bruteforce_ips.add(ip)
             if self._ws_manager:
                 await self._ws_manager.broadcast_alert(alert)
             self._update_stats("Brute force detected", confidence)

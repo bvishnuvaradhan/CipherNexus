@@ -74,6 +74,40 @@ THREAT_RECOMMENDATIONS = {
 }
 
 
+@router.get("")
+async def list_alerts(
+    limit: int = Query(50, ge=1, le=200),
+    severity: Optional[str] = Query(None),
+):
+    alerts = await get_alerts(limit=limit, severity=severity)
+    return {"alerts": alerts, "total": len(alerts)}
+
+
+@router.get("/threat-level")
+async def threat_level():
+    return await get_threat_level()
+
+
+@router.get("/stats")
+async def alert_stats():
+    total = await count_documents("alerts")
+    unresolved_statuses = ["active", "investigating", "blocked", "monitoring"]
+    unresolved_query = {"status": {"$in": unresolved_statuses}}
+
+    active = await count_documents("alerts", unresolved_query)
+    critical = await count_documents("alerts", {**unresolved_query, "severity": "critical"})
+    high = await count_documents("alerts", {**unresolved_query, "severity": "high"})
+    medium = await count_documents("alerts", {**unresolved_query, "severity": "medium"})
+    return {
+        "total": total,
+        "active": active,
+        "critical": critical,
+        "high": high,
+        "medium": medium,
+        "resolved": total - active,
+    }
+
+
 @router.get("/{alert_id}")
 async def get_alert_detail(alert_id: str):
     """Return a single alert with its related commander response and recommendations."""
@@ -98,35 +132,4 @@ async def get_alert_detail(alert_id: str):
         "alert": alert,
         "commander_response": response,
         "recommendations": recs,
-    }
-
-
-@router.get("")
-async def list_alerts(
-    limit: int = Query(50, ge=1, le=200),
-    severity: Optional[str] = Query(None),
-):
-    alerts = await get_alerts(limit=limit, severity=severity)
-    return {"alerts": alerts, "total": len(alerts)}
-
-
-@router.get("/threat-level")
-async def threat_level():
-    return await get_threat_level()
-
-
-@router.get("/stats")
-async def alert_stats():
-    total = await count_documents("alerts")
-    active = await count_documents("alerts", {"status": "active"})
-    critical = await count_documents("alerts", {"severity": "critical"})
-    high = await count_documents("alerts", {"severity": "high"})
-    medium = await count_documents("alerts", {"severity": "medium"})
-    return {
-        "total": total,
-        "active": active,
-        "critical": critical,
-        "high": high,
-        "medium": medium,
-        "resolved": total - active,
     }

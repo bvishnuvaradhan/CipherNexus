@@ -12,6 +12,10 @@ from typing import Optional
 from agents.sentry import SentryAgent
 from agents.detective import DetectiveAgent
 from agents.commander import CommanderAgent
+from agents.threat_intelligence import ThreatIntelligenceAgent
+from agents.anomaly_detection import AnomalyDetectionAgent
+from agents.response_automation import ResponseAutomationAgent
+from agents.forensics import ForensicsAgent
 
 
 class AgentOrchestrator:
@@ -27,6 +31,10 @@ class AgentOrchestrator:
         self.sentry = SentryAgent()
         self.detective = DetectiveAgent()
         self.commander = CommanderAgent()
+        self.threat_intelligence = ThreatIntelligenceAgent()
+        self.anomaly_detection = AnomalyDetectionAgent()
+        self.response_automation = ResponseAutomationAgent()
+        self.forensics = ForensicsAgent()
         self._bus: asyncio.Queue = asyncio.Queue()
         self._ws_manager: Optional[object] = None
         self._running = False
@@ -35,10 +43,20 @@ class AgentOrchestrator:
         self.sentry.attach_bus(self._bus)
         self.detective.attach_bus(self._bus)
         self.commander.attach_bus(self._bus)
+        self.response_automation.attach_bus(self._bus)
+        self.forensics.attach_bus(self._bus)
         self.commander.attach_detective(self.detective)
+        self.commander.attach_threat_intelligence(self.threat_intelligence)
+        self.commander.attach_anomaly_detection(self.anomaly_detection)
+        self.commander.attach_response_automation(self.response_automation)
+        self.commander.attach_forensics(self.forensics)
         print("[ONLINE] Sentry Agent")
         print("[ONLINE] Detective Agent")
         print("[ONLINE] Commander Agent")
+        print("[ONLINE] Threat Intelligence Agent")
+        print("[ONLINE] Anomaly Detection Agent")
+        print("[ONLINE] Response Automation Agent")
+        print("[ONLINE] Forensics Agent")
 
     def attach_ws_manager(self, ws_manager):
         self._ws_manager = ws_manager
@@ -117,6 +135,10 @@ class AgentOrchestrator:
                             self.sentry.get_status(),
                             self.detective.get_status(),
                             self.commander.get_status(),
+                            self.threat_intelligence.get_status(),
+                            self.anomaly_detection.get_status(),
+                            self.response_automation.get_status(),
+                            self.forensics.get_status(),
                         ]
                     }
                     await self._ws_manager.broadcast_status(status)
@@ -132,6 +154,10 @@ class AgentOrchestrator:
             self.sentry.get_status(),
             self.detective.get_status(),
             self.commander.get_status(),
+            self.threat_intelligence.get_status(),
+            self.anomaly_detection.get_status(),
+            self.response_automation.get_status(),
+            self.forensics.get_status(),
         ]
 
     async def trigger_simulation(
@@ -141,6 +167,7 @@ class AgentOrchestrator:
         intensity: str = "medium",
         target: str = "192.168.0.1",
         params: dict = None,
+        context: dict = None,
     ) -> dict:
         """
         Trigger a simulation from the Hacker Console.
@@ -149,6 +176,14 @@ class AgentOrchestrator:
         from models.schemas import AttackType, SeverityLevel
 
         params = params or {}
+        context = context or {}
+        flow_features = context.get("flow_features") or {}
+
+        def build_details(extra: dict | None = None) -> dict:
+            details = dict(extra or {})
+            if flow_features:
+                details["flow_features"] = flow_features
+            return details
         intensity_map = {"low": 0.5, "medium": 0.75, "high": 0.95}
 
         # ── Brute Force ────────────────────────────────────────────────
@@ -172,7 +207,7 @@ class AgentOrchestrator:
                     "severity": last_alert.get("severity", "high"),
                     "source_ip": ip,
                     "confidence": last_alert.get("confidence", 0.85),
-                    "details": {"failed_attempts": len(alerts), "username": username},
+                    "details": build_details({"failed_attempts": len(alerts), "username": username}),
                 })
             return {"triggered": "Detective", "alert": alerts[-1] if alerts else None, "alerts_count": len(alerts), "username": username}
 
@@ -193,7 +228,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "medium"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.75),
-                    "details": {"ports_count": len(ports), "range": f"{start}-{end}"},
+                    "details": build_details({"ports_count": len(ports), "range": f"{start}-{end}"}),
                 })
             return {"triggered": "Sentry", "alert": alert, "ports_scanned": len(ports)}
 
@@ -211,7 +246,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "medium"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.80),
-                    "details": {"location": location, "username": username},
+                    "details": build_details({"location": location, "username": username}),
                 })
             return {"triggered": "Detective", "alert": alert, "location": location}
 
@@ -231,7 +266,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "critical"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.90),
-                    "details": {"megabytes": mb, "protocol": exfil_protocol},
+                    "details": build_details({"megabytes": mb, "protocol": exfil_protocol}),
                 })
             return {"triggered": "Detective", "alert": alert, "megabytes": mb}
 
@@ -249,7 +284,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "high"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.85),
-                    "details": {"packet_rate": rate},
+                    "details": build_details({"packet_rate": rate}),
                 })
             return {"triggered": "Sentry", "alert": alert, "packet_rate": rate}
 
@@ -268,7 +303,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "critical"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.95),
-                    "details": {"packet_rate": rate, "concurrent_connections": conns},
+                    "details": build_details({"packet_rate": rate, "concurrent_connections": conns}),
                 })
             return {"triggered": "Sentry", "alert": alert, "packet_rate": rate}
 
@@ -287,7 +322,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "critical"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.90),
-                    "details": {"injection_type": injection_type, "endpoint": endpoint},
+                    "details": build_details({"injection_type": injection_type, "endpoint": endpoint}),
                 })
             return {"triggered": "Detective", "alert": alert, "injection_type": injection_type}
 
@@ -305,7 +340,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "high"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.85),
-                    "details": {"xss_type": xss_type, "endpoint": endpoint},
+                    "details": build_details({"xss_type": xss_type, "endpoint": endpoint}),
                 })
             return {"triggered": "Detective", "alert": alert, "xss_type": xss_type}
 
@@ -323,7 +358,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "critical"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.95),
-                    "details": {"spread_rate": spread_rate, "family": ransom_family},
+                    "details": build_details({"spread_rate": spread_rate, "family": ransom_family}),
                 })
             return {"triggered": "Detective", "alert": alert, "spread_rate": spread_rate}
 
@@ -341,7 +376,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "critical"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.90),
-                    "details": {"target_protocol": protocol, "technique": mitm_technique},
+                    "details": build_details({"target_protocol": protocol, "technique": mitm_technique}),
                 })
             return {"triggered": "Sentry", "alert": alert, "protocol": protocol}
 
@@ -359,7 +394,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "high"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.85),
-                    "details": {"target_domain": domain},
+                    "details": build_details({"target_domain": domain}),
                 })
             return {"triggered": "Sentry", "alert": alert, "domain": domain}
 
@@ -378,7 +413,7 @@ class AgentOrchestrator:
                     "severity": alert.get("severity", "critical"),
                     "source_ip": ip,
                     "confidence": alert.get("confidence", 0.90),
-                    "details": {"beacon_interval": interval, "protocol": c2_protocol},
+                    "details": build_details({"beacon_interval": interval, "protocol": c2_protocol}),
                 })
             return {"triggered": "Sentry", "alert": alert, "beacon_interval": interval}
 

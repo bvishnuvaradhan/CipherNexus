@@ -1,28 +1,72 @@
 import { useEffect, useRef, useCallback } from 'react'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/alerts'
+function resolveWsUrl() {
+  const envUrl = import.meta.env.VITE_WS_URL
+
+  // Ignore placeholder-like values such as "ws:<URL>/...".
+  if (typeof envUrl === 'string') {
+    const trimmed = envUrl.trim()
+    if (trimmed && !trimmed.includes('<') && !trimmed.includes('>') && /^wss?:\/\//i.test(trimmed)) {
+      return trimmed
+    }
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${protocol}://${window.location.host}/ws/alerts`
+}
 
 export function useWebSocket(onMessage) {
   const wsRef = useRef(null)
   const reconnectTimer = useRef(null)
   const onMessageRef = useRef(onMessage)
+  const shouldReconnectRef = useRef(true)
+  const reconnectAttemptRef = useRef(0)
 
   useEffect(() => {
     onMessageRef.current = onMessage
   }, [onMessage])
 
-  const connect = useCallback(() => {
-    try {
-      const ws = new WebSocket(WS_URL)
+  useEffect(() => {
+    const clearSocketState = (ws) => {
+      if (ws?._pingInterval) {
+        clearInterval(ws._pingInterval)
+        ws._pingInterval = null
+      }
+    }
+
+    const scheduleReconnect = (connectFn) => {
+      if (!shouldReconnectRef.current || reconnectTimer.current) return
+      const attempt = reconnectAttemptRef.current
+      const delay = Math.min(10000, 1500 + attempt * 1000)
+      reconnectAttemptRef.current = Math.min(attempt + 1, 10)
+      console.log(`🔌 WebSocket disconnected — reconnecting in ${Math.round(delay / 1000)}s`)
+      reconnectTimer.current = setTimeout(() => {
+        reconnectTimer.current = null
+        connectFn()
+      }, delay)
+    }
+
+    const connect = () => {
+      if (!shouldReconnectRef.current) return
+
+      let ws
+      try {
+        ws = new WebSocket(resolveWsUrl())
+      } catch (e) {
+        console.warn('WS connect error', e)
+        scheduleReconnect(connect)
+        return
+      }
+
       wsRef.current = ws
 
       ws.onopen = () => {
-        console.log('🔌 WebSocket connected')
+        reconnectAttemptRef.current = 0
         if (reconnectTimer.current) {
           clearTimeout(reconnectTimer.current)
           reconnectTimer.current = null
         }
-        // Client-side ping keepalive to prevent silent disconnects
+        console.log('🔌 WebSocket connected')
         ws._pingInterval = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send('ping')
         }, 25000)
@@ -30,38 +74,43 @@ export function useWebSocket(onMessage) {
 
       ws.onmessage = (event) => {
         try {
-          // Ignore pong responses
           if (event.data === 'pong') return
           const data = JSON.parse(event.data)
+          if (data?.type === 'pong') return
           onMessageRef.current?.(data)
         } catch (e) {
           console.warn('WS parse error', e)
         }
       }
 
-      ws.onclose = () => {
-        console.log('🔌 WebSocket disconnected — reconnecting in 3s')
-        if (ws._pingInterval) clearInterval(ws._pingInterval)
-        reconnectTimer.current = setTimeout(connect, 3000)
+      ws.onerror = () => {
+        // Avoid noisy logs for transient handshake failures.
       }
 
-      ws.onerror = (err) => {
-        console.warn('WS error', err)
-        ws.close()
+      ws.onclose = () => {
+        clearSocketState(ws)
+        if (wsRef.current === ws) wsRef.current = null
+        // Reconnect only while hook instance is still mounted.
+        if (shouldReconnectRef.current) {
+          scheduleReconnect(connect)
+        }
       }
-    } catch (e) {
-      console.warn('WS connect error', e)
-      reconnectTimer.current = setTimeout(connect, 3000)
+    }
+
+    shouldReconnectRef.current = true
+    connect()
+
+    return () => {
+      shouldReconnectRef.current = false
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+      if (wsRef.current) {
+        clearSocketState(wsRef.current)
+        if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+          wsRef.current.close()
+        }
+      }
     }
   }, [])
-
-  useEffect(() => {
-    connect()
-    return () => {
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
-      wsRef.current?.close()
-    }
-  }, [connect])
 
   const send = useCallback((data) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

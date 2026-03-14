@@ -143,7 +143,7 @@ function A2APathPanel({ path = [] }) {
         <div className="p-4 overflow-x-auto">
           <div className="flex items-stretch gap-3 min-w-max pb-2">
             {path.map((step, index) => (
-              <div key={step.id || index} className="flex items-center gap-3">
+              <div key={`${step.id || 'step'}-${index}`} className="flex items-center gap-3">
                 <div className="w-[260px] rounded-xl border border-slate-800 bg-slate-950/60 p-4 ring-1 ring-slate-800/60">
                   <div className="flex items-center justify-between gap-2 mb-3">
                     <span className="text-[10px] font-mono text-slate-600">STEP {index + 1}</span>
