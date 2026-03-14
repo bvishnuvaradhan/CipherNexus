@@ -15,6 +15,7 @@ from routes.logs import router as logs_router
 from routes.agents import router as agents_router
 from routes.responses import router as responses_router
 from routes.simulator import router as simulator_router
+from routes.data import router as data_router
 from routes.auth import router as auth_router
 from websocket.manager import websocket_router, manager as ws_manager
 from agents.orchestrator import AgentOrchestrator
@@ -59,6 +60,7 @@ app.include_router(logs_router, prefix="/logs", tags=["Logs"])
 app.include_router(agents_router, prefix="/agents", tags=["Agents"])
 app.include_router(responses_router, prefix="/responses", tags=["Responses"])
 app.include_router(simulator_router, prefix="/simulate-attack", tags=["Simulator"])
+app.include_router(data_router, prefix="/data", tags=["Data"])
 app.include_router(websocket_router, tags=["WebSocket"])
 
 

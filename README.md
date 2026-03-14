@@ -217,6 +217,7 @@ npm run dev
 | GET | `/responses` | Automated response log |
 | GET | `/responses/stats` | Response counts by status |
 | POST | `/simulate-attack` | Trigger attack simulation |
+| POST | `/data/seed-real` | Insert realistic SOC sample data |
 
 ### WebSocket
 
@@ -235,6 +236,20 @@ ws://localhost:8000/ws/alerts
 | `log` | New log entry |
 | `status` | Agent status update |
 | `heartbeat` | Keep-alive (every 30s) |
+
+---
+
+## 📥 Seed Realistic Data
+
+Populate MongoDB with practical SOC-style records for alerts, logs, responses, agent messages, and attacks:
+
+```bash
+curl -X POST http://localhost:8000/data/seed-real \
+  -H "Content-Type: application/json" \
+  -d '{"alerts":40,"logs":120,"responses":30,"agent_messages":60,"attacks":20}'
+```
+
+Optional: include `seed` for deterministic data generation across runs.
 
 ---
 
