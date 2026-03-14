@@ -31,6 +31,14 @@ async def _find_incident_commander_response(alert: dict) -> Optional[dict]:
     if best_direct:
         return best_direct
 
+    details = alert.get("details") if isinstance(alert.get("details"), dict) else {}
+    linked_alert_id = details.get("related_alert_id") or details.get("parent_alert_id")
+    if linked_alert_id:
+        linked_responses = await fetch_recent("responses", limit=50, query={"related_alert_id": linked_alert_id})
+        best_linked = _pick_best_response(linked_responses)
+        if best_linked:
+            return best_linked
+
     source_ip = alert.get("source_ip")
     threat_type = alert.get("threat_type")
     timestamp = alert.get("timestamp")

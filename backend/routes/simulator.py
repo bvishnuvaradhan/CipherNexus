@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from fastapi import APIRouter, Request
 from models.schemas import SimulateAttackRequest, AttackType
-from database.repository import save_attack, save_alert
+from database.repository import save_attack, save_alert, fetch_one
 from websocket.manager import manager as ws_manager
 from agents.anomaly_detection import evaluate_flow
 
@@ -29,6 +29,13 @@ def _severity_from_score(score: float) -> str:
     if score >= 0.65:
         return "medium"
     return "low"
+
+
+def _max_severity(left: str, right: str | None) -> str:
+    rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    left_norm = str(left or "low").lower()
+    right_norm = str(right or "low").lower()
+    return left_norm if rank.get(left_norm, 0) >= rank.get(right_norm, 0) else right_norm
 
 
 def _build_flow_features(attack_type: str, intensity: str, attack: dict) -> dict:
@@ -236,21 +243,28 @@ async def simulate_attack(payload: SimulateAttackRequest, request: Request):
         ml_result = evaluate_flow(flow_features, event=payload.attack_type.value)
         if ml_result.get("anomaly"):
             score = float(ml_result.get("score", 0.0))
+            parent_alert_id = (result.get("alert") or {}).get("id") if isinstance(result, dict) else None
+            parent_alert = await fetch_one("alerts", {"id": parent_alert_id}) if parent_alert_id else None
+            parent_status = str((parent_alert or {}).get("status", "active") or "active")
+            derived_severity = _severity_from_score(score)
+            merged_severity = _max_severity(derived_severity, (parent_alert or {}).get("severity"))
             ml_alert = {
                 "id": str(uuid.uuid4()),
                 "timestamp": datetime.utcnow().isoformat(),
                 "agent": "System",
                 "event": "ML Anomaly Detected (Simulation)",
                 "threat_type": payload.attack_type.value,
-                "severity": _severity_from_score(score),
+                "severity": merged_severity,
                 "source_ip": source_ip,
                 "target": attack.get("target"),
-                "status": "active",
+                "status": parent_status,
                 "confidence": round(score, 3),
                 "details": {
                     "ml_prediction": ml_result,
                     "flow_features": flow_features,
                     "origin": "simulate_attack",
+                    "related_alert_id": parent_alert_id,
+                    "analysis_scope": "incident_overlay",
                 },
             }
             await save_alert(ml_alert)
