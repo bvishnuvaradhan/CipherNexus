@@ -131,7 +131,12 @@ class SentryAgent:
             return None
 
         confidence = min(0.99, 0.55 + (len(ports_scanned) / 200))
-        severity = SeverityLevel.HIGH if len(ports_scanned) > 100 else SeverityLevel.MEDIUM
+        if len(ports_scanned) > 150:
+            severity = SeverityLevel.HIGH
+        elif len(ports_scanned) >= 40:
+            severity = SeverityLevel.MEDIUM
+        else:
+            severity = SeverityLevel.LOW
 
         alert = {
             "id": str(uuid.uuid4()),

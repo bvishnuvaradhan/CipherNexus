@@ -198,6 +198,17 @@ function AlertDetailPanel({ detail, loading, alert, logs = [] }) {
 
 export default function ThreatAlerts() {
   const PAGE_SIZE = 10
+
+  const formatLocalDateTime = (date) => {
+    const d = new Date(date)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const h = String(d.getHours()).padStart(2, '0')
+    const min = String(d.getMinutes()).padStart(2, '0')
+    return `${y}-${m}-${day}T${h}:${min}`
+  }
+
   const [alerts, setAlerts] = useState([])
   const [stats, setStats] = useState({})
   const [loading, setLoading] = useState(true)
@@ -208,6 +219,10 @@ export default function ThreatAlerts() {
   const [alertDetail, setAlertDetail] = useState(null)
   const [alertLogs, setAlertLogs] = useState([])
   const [detailLoading, setDetailLoading] = useState(false)
+  const [reportFrom, setReportFrom] = useState(() => formatLocalDateTime(Date.now() - 24 * 60 * 60 * 1000))
+  const [reportTo, setReportTo] = useState(() => formatLocalDateTime(Date.now()))
+  const [reportCategories, setReportCategories] = useState([])
+  const [downloadingReport, setDownloadingReport] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -279,6 +294,35 @@ export default function ThreatAlerts() {
     }
   }, [page, totalPages])
 
+  const toggleReportCategory = useCallback((type) => {
+    setReportCategories((prev) => (
+      prev.includes(type) ? prev.filter((item) => item !== type) : [...prev, type]
+    ))
+  }, [])
+
+  const downloadReport = useCallback(async () => {
+    if (!reportFrom || !reportTo) return
+    setDownloadingReport(true)
+    try {
+      const startIso = new Date(reportFrom).toISOString().replace('Z', '')
+      const endIso = new Date(reportTo).toISOString().replace('Z', '')
+      const response = await alertsAPI.reportCsv(startIso, endIso, severityFilter, reportCategories)
+      const blobUrl = URL.createObjectURL(new Blob([response.data], { type: 'text/csv;charset=utf-8;' }))
+      const link = document.createElement('a')
+      const safeFrom = reportFrom.replace(/[:T]/g, '-').slice(0, 16)
+      const safeTo = reportTo.replace(/[:T]/g, '-').slice(0, 16)
+      const categorySuffix = reportCategories.length > 0 ? `-${reportCategories.length}-cats` : '-all-cats'
+      link.href = blobUrl
+      link.setAttribute('download', `threat-alerts-report-${safeFrom}-to-${safeTo}${categorySuffix}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(blobUrl)
+    } finally {
+      setDownloadingReport(false)
+    }
+  }, [reportFrom, reportTo, severityFilter, reportCategories])
+
   return (
     <div className="p-4 lg:p-6 space-y-5 animate-fade-in">
       <PageHeader
@@ -325,6 +369,82 @@ export default function ThreatAlerts() {
             {s} {s !== 'all' && stats[s] !== undefined ? `(${stats[s]})` : ''}
           </button>
         ))}
+      </div>
+
+      {/* Report download */}
+      <div className="cyber-card p-4">
+        <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+          <div className="flex-1 min-w-[200px]">
+            <p className="text-[10px] font-mono text-slate-600 uppercase mb-1">Report From</p>
+            <input
+              type="datetime-local"
+              value={reportFrom}
+              onChange={(e) => setReportFrom(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-xs font-mono text-slate-300"
+            />
+          </div>
+          <div className="flex-1 min-w-[200px]">
+            <p className="text-[10px] font-mono text-slate-600 uppercase mb-1">Report To</p>
+            <input
+              type="datetime-local"
+              value={reportTo}
+              onChange={(e) => setReportTo(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-xs font-mono text-slate-300"
+            />
+          </div>
+          <div className="lg:pb-0.5">
+            <button
+              onClick={downloadReport}
+              disabled={downloadingReport || !reportFrom || !reportTo}
+              className="btn-cyber text-xs px-3 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {downloadingReport ? (
+                <><Loader className="w-3.5 h-3.5 animate-spin" /> Generating Report...</>
+              ) : (
+                <><FileText className="w-3.5 h-3.5" /> Download CSV Report</>
+              )}
+            </button>
+          </div>
+        </div>
+        <div className="mt-3">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <p className="text-[10px] font-mono text-slate-600 uppercase">Categories (Threat Types)</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setReportCategories(Object.keys(ATTACK_TYPE_META))}
+                className="px-2 py-1 rounded border border-slate-700 text-[10px] font-mono text-slate-400 hover:text-slate-200"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                onClick={() => setReportCategories([])}
+                className="px-2 py-1 rounded border border-slate-700 text-[10px] font-mono text-slate-400 hover:text-slate-200"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(ATTACK_TYPE_META).map(([type, meta]) => {
+              const selected = reportCategories.includes(type)
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => toggleReportCategory(type)}
+                  className={`px-2.5 py-1 rounded border text-[10px] font-mono font-semibold uppercase tracking-wide transition-all ${selected ? `${meta.bg} ${meta.color}` : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}
+                >
+                  {meta.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <p className="mt-2 text-[11px] font-mono text-slate-600">
+          Exports alert records and commander analysis for the selected period and chosen categories.
+        </p>
       </div>
 
       {/* Alerts table */}

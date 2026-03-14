@@ -54,6 +54,8 @@ class CommanderAgent:
     CONFIDENCE_BONUS_ANOMALY = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_ANOMALY", "0.10"))
     CONFIDENCE_BONUS_SEVERITY = float(os.getenv("COMMANDER_CONFIDENCE_BONUS_SEVERITY", "0.08"))
     CONFIDENCE_PENALTY_NO_CORROBORATION = float(os.getenv("COMMANDER_CONFIDENCE_PENALTY_NO_CORROBORATION", "0.04"))
+    BRUTE_FORCE_BLOCK_CONFIDENCE = float(os.getenv("COMMANDER_BRUTE_FORCE_BLOCK_CONFIDENCE", "0.90"))
+    BRUTE_FORCE_MONITOR_BLOCK_SECONDS = max(5, int(os.getenv("COMMANDER_BRUTE_FORCE_MONITOR_BLOCK_SECONDS", "20")))
 
     def __init__(self):
         self.status = "online"
@@ -219,6 +221,23 @@ class CommanderAgent:
         response_status = str(response.get("status", "")).lower()
 
         if response_status == ResponseStatus.MONITORING.value:
+            threat_type = str(alert.get("threat_type", "") or "")
+            if threat_type == AttackType.BRUTE_FORCE.value:
+                auto_block_seconds = self.BRUTE_FORCE_MONITOR_BLOCK_SECONDS
+                await self._set_alert_lifecycle(
+                    alert_id,
+                    "investigating",
+                    {
+                        "phase": "monitoring",
+                        "updated_by": self.NAME.value,
+                        "reason": "Brute-force under threshold; auto-block if activity persists",
+                        "target": target,
+                        "auto_block_seconds": auto_block_seconds,
+                    },
+                )
+                asyncio.create_task(self._auto_block_bruteforce_alert(alert_id, target, auto_block_seconds))
+                return
+
             auto_resolve_seconds = self.MONITORING_AUTO_RESOLVE_SECONDS
             await self._set_alert_lifecycle(
                 alert_id,
@@ -261,6 +280,76 @@ class CommanderAgent:
             )
             asyncio.create_task(self._auto_resolve_blocked_alert(alert_id, target, auto_unblock_seconds))
             return
+
+    async def _auto_block_bruteforce_alert(self, alert_id: str, target: str, delay_seconds: int) -> None:
+        await asyncio.sleep(delay_seconds)
+
+        latest_alert = await fetch_one("alerts", {"id": alert_id})
+        if not latest_alert:
+            return
+
+        latest_status = str(latest_alert.get("status", "") or "").lower()
+        if latest_status in ("resolved", "blocked"):
+            return
+
+        escalation_response = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.utcnow().isoformat(),
+            "action": f"Block IP {target}",
+            "target": target,
+            "agent": self.NAME.value,
+            "confidence": max(0.9, float(latest_alert.get("confidence", 0.0) or 0.0)),
+            "reasoning": f"Brute-force activity persisted for {delay_seconds}s in monitoring; escalating to immediate block.",
+            "status": ResponseStatus.BLOCKED.value,
+            "related_alert_id": alert_id,
+            "signals": [
+                f"[Commander] Brute-force monitor timer elapsed ({delay_seconds}s)",
+                "[Commander] Escalating from monitoring to blocked",
+            ],
+        }
+
+        execution_status = "not_executed"
+        if self._response_automation:
+            await self.broadcast_command(AgentName.RESPONSE_AUTOMATION, "execute_response", {
+                "action": escalation_response["action"],
+                "target": target,
+                "status": escalation_response["status"],
+            })
+            execution = await self._response_automation.execute_action(escalation_response)
+            execution_status = execution.get("execution_status", "not_executed")
+            escalation_response["signals"].append(f"[Response Automation] Execution status: {execution_status}")
+
+        await save_response(escalation_response)
+        if self._ws_manager:
+            await self._ws_manager.broadcast_response(escalation_response)
+
+        if execution_status in ("executed", "already_enforced"):
+            auto_unblock_seconds = max(
+                int(os.getenv("BLOCK_AUTO_UNBLOCK_SECONDS", "30")),
+                self.MIN_RESOLUTION_SECONDS,
+            )
+            mitigated_count = await mark_attacks_mitigated(
+                target,
+                {
+                    "resolved_by": self.NAME.value,
+                    "execution_status": execution_status,
+                    "reason": "Brute-force monitor escalation",
+                },
+            )
+            await self._set_alert_lifecycle(
+                alert_id,
+                "blocked",
+                {
+                    "phase": "containment",
+                    "updated_by": self.NAME.value,
+                    "execution_status": execution_status,
+                    "target": target,
+                    "mitigated_attacks": mitigated_count,
+                    "auto_unblock_seconds": auto_unblock_seconds,
+                    "reason": f"Escalated from monitoring after {delay_seconds}s",
+                },
+            )
+            asyncio.create_task(self._auto_resolve_blocked_alert(alert_id, target, auto_unblock_seconds))
 
     async def _auto_resolve_monitoring_alert(self, alert_id: str, target: str, delay_seconds: int) -> None:
         await asyncio.sleep(delay_seconds)
@@ -547,7 +636,7 @@ class CommanderAgent:
             return f"Monitor IP {ip} — reconnaissance watch", ResponseStatus.MONITORING
 
         if threat_type == AttackType.BRUTE_FORCE.value:
-            if confidence >= 0.95 and severity == SeverityLevel.CRITICAL:
+            if confidence >= self.BRUTE_FORCE_BLOCK_CONFIDENCE:
                 self._blocked_ips.add(ip)
                 return f"Block IP {ip}", ResponseStatus.BLOCKED
             return f"Monitor IP {ip} — brute-force watch", ResponseStatus.MONITORING

@@ -125,13 +125,14 @@ class DetectiveAgent:
             return None
 
         confidence = random.uniform(0.70, 0.90)
+        severity = SeverityLevel.MEDIUM if confidence >= 0.80 else SeverityLevel.LOW
         alert = {
             "id": str(uuid.uuid4()),
             "timestamp": datetime.utcnow().isoformat(),
             "agent": self.NAME.value,
             "event": "Suspicious Login Location",
             "threat_type": AttackType.SUSPICIOUS_LOGIN.value,
-            "severity": SeverityLevel.MEDIUM.value,
+            "severity": severity.value,
             "source_ip": ip,
             "target": username,
             "status": AlertStatus.ACTIVE.value,
@@ -144,7 +145,7 @@ class DetectiveAgent:
         await self._log_event(
             LogEventType.LOGIN_FAILED,
             f"Suspicious login location for '{username}': {location}",
-            ip=ip, severity=SeverityLevel.MEDIUM, user=username,
+            ip=ip, severity=severity, user=username,
         )
         self._update_stats("Suspicious location detected", confidence)
         return alert

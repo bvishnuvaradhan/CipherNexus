@@ -24,9 +24,9 @@ IOC_SOURCE_IPS = {
 def _severity_from_score(score: float) -> str:
     if score >= 0.9:
         return "critical"
-    if score >= 0.75:
+    if score >= 0.78:
         return "high"
-    if score >= 0.5:
+    if score >= 0.65:
         return "medium"
     return "low"
 

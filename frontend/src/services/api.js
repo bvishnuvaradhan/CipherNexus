@@ -63,6 +63,16 @@ export const alertsAPI = {
   detail:      (alertId) => api.get(`/alerts/${alertId}`),
   threatLevel: () => api.get('/alerts/threat-level'),
   stats:       () => api.get('/alerts/stats'),
+  reportCsv:   (startTime, endTime, severity = null, threatTypes = []) =>
+    api.get('/alerts/report.csv', {
+      params: {
+        start_time: startTime,
+        end_time: endTime,
+        ...(severity && severity !== 'all' ? { severity } : {}),
+        ...(Array.isArray(threatTypes) && threatTypes.length > 0 ? { threat_types: threatTypes.join(',') } : {}),
+      },
+      responseType: 'blob',
+    }),
 }
 
 // ── Logs ──────────────────────────────────────────────────────────────────
