@@ -3,6 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { Shield, Lock, User, Eye, EyeOff, AlertCircle, Loader, Skull } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
+const SOC_CREDENTIALS = [
+  { username: 'admin', password: 'cyber2026' },
+  { username: 'analyst', password: 'soc2026' },
+]
+
 export default function Login() {
   const { login } = useAuth()
   const navigate = useNavigate()
@@ -10,6 +15,11 @@ export default function Login() {
   const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  const fillCredentials = (username, password) => {
+    setForm({ username, password })
+    setError('')
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -126,6 +136,29 @@ export default function Login() {
               )}
             </button>
           </form>
+
+          <div className="mt-6 rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+            <p className="font-mono text-[11px] uppercase tracking-wider text-slate-500 mb-2">
+              SOC Demo Credentials
+            </p>
+            <div className="space-y-2">
+              {SOC_CREDENTIALS.map((cred) => (
+                <button
+                  key={cred.username}
+                  type="button"
+                  onClick={() => fillCredentials(cred.username, cred.password)}
+                  className="w-full text-left rounded-md border border-slate-800 bg-slate-900/50 px-3 py-2 hover:border-cyan-500/40 hover:bg-slate-900 transition-colors"
+                >
+                  <p className="font-mono text-xs text-slate-300">
+                    User: <span className="text-cyan-400">{cred.username}</span>
+                  </p>
+                  <p className="font-mono text-xs text-slate-500">
+                    Pass: {cred.password}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <p className="text-center text-xs font-mono text-slate-700 mt-6">
