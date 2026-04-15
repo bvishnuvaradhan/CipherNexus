@@ -12,7 +12,11 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
       '/ws': {
-        target: 'ws://localhost:8000',
+        // Proxy websocket requests to the backend HTTP server and enable WS proxying.
+        // Using an HTTP target with `ws: true` is more robust across platforms.
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
         ws: true,
       },
     },

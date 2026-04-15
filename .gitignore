@@ -50,3 +50,6 @@ docker-compose.override.yml
 # Local ML data/artifacts
 dataset/
 backend/training_artifacts/
+
+output.docx
+output.pdf
